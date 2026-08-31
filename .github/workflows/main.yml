@@ -2,10 +2,16 @@ name: Resell Scout Test
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
 
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - name: Test
-        run: echo "Resell Scout is working!"
+        run: |
+          echo "Resell Scout is working!"
+          echo "Automatic check started at:"
+          date
