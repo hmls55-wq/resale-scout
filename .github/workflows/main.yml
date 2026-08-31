@@ -1,4 +1,4 @@
-name: Resell Scout Test
+name: Resell Scout
 
 on:
   workflow_dispatch:
@@ -6,12 +6,17 @@ on:
     - cron: "17 * * * *"
 
 jobs:
-  test:
+  scout:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test
-        run: |
-          echo "Resell Scout is working!"
-          echo "Automatic check started at:"
-          date
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Resell Scout
+        run: python scout.py
