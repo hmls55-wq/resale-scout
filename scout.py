@@ -300,10 +300,12 @@ for item in items:
         print("想定販売価格:", f'{item["estimated_sale"]:,}円')
         print("想定利益:", f'{profit:,}円')
         print("距離:", f'{item["distance"]}km')
-        print("サイズ:",
-              f'{item["length"]} × '
-              f'{item["width"]} × '
-              f'{item["height"]}cm')
+        print(
+            "サイズ:",
+            f'{item["length"]} × '
+            f'{item["width"]} × '
+            f'{item["height"]}cm'
+        )
 
         if brands:
             print("ブランド:", ", ".join(brands))
