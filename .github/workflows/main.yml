@@ -22,9 +22,17 @@ jobs:
         run: python scout.py
 
       - name: Build Mercari verification report
+        if: always()
         run: python build_verification_report.py
 
+      - name: Show generated reports
+        if: always()
+        run: |
+          echo "=== generated files ==="
+          ls -lah resell_report.md resell_candidates.json verification_report.md
+
       - name: Upload scout report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: resell-scout-report
