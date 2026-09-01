@@ -33,9 +33,9 @@ jobs:
         if: success()
         run: python patch_mercari_region.py
 
-      - name: Capture Mercari API response for debugging
+      - name: Enable Mercari API JPY sold-price extraction
         if: success()
-        run: python patch_mercari_api_debug.py
+        run: python patch_mercari_api.py
 
       - name: Check Mercari sold-market prices
         if: success()
