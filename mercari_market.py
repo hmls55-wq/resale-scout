@@ -8,6 +8,8 @@ from pathlib import Path
 
 INPUT = Path("resell_candidates.json")
 OUTPUT = Path("mercari_market.json")
+DEBUG_SCREENSHOT = Path("mercari_debug.png")
+DEBUG_TEXT = Path("mercari_debug.txt")
 MAX_CHECKS = 15
 MIN_PRICE = 300
 MAX_PRICE = 2_000_000
@@ -48,36 +50,61 @@ def score_similarity(source_title, candidate_title):
     return min(100, int(overlap * 75 + min(model_hits, 5) * 5))
 
 
-def browser_lookup(page, query):
+def collect_dom_items(page):
+    # Do not depend on a specific React/Next.js card class. Collect every item link
+    # and use its nearest list/container text for price extraction.
+    return page.locator('a[href*="/item/"]').evaluate_all(
+        """els => els.map(a => ({
+            href: a.href,
+            text: (a.closest('li') || a.closest('[role="article"]') || a.parentElement || a).innerText || ''
+        }))"""
+    )
+
+
+def browser_lookup(page, query, debug=False):
     url = "https://jp.mercari.com/search?" + urllib.parse.urlencode({
         "keyword": query,
         "status": "sold_out|trading",
     })
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(3000)
-    # Force a small scroll so lazy-loaded result cards appear.
+    page.wait_for_timeout(5000)
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(2500)
 
-    items = page.locator('a[href*="/item/"]').all()
+    anchor_count = page.locator('a[href*="/item/"]').count()
+    if debug:
+        body = normalize(page.locator("body").inner_text())
+        DEBUG_TEXT.write_text(
+            f"URL={page.url}\nTITLE={page.title()}\nITEM_ANCHORS={anchor_count}\nBODY={body[:12000]}",
+            encoding="utf-8",
+        )
+        page.screenshot(path=str(DEBUG_SCREENSHOT), full_page=False)
+        print("Mercari debug:", page.url, page.title(), "item anchors=", anchor_count)
+        print("Mercari body preview:", body[:1000])
+
+    raw_items = collect_dom_items(page)
     rows = []
     seen = set()
-    for anchor in items[:80]:
-        href = anchor.get_attribute("href") or ""
+    for raw in raw_items[:120]:
+        href = raw.get("href", "")
         if not href or href in seen:
             continue
-        text = normalize(anchor.inner_text())
+        text = normalize(raw.get("text", ""))
         if not text:
             continue
         seen.add(href)
         prices = money_values(text)
         if not prices:
-            # Some cards render price in a sibling/descendant not captured by inner_text.
-            prices = money_values(anchor.evaluate("el => el.parentElement ? el.parentElement.innerText : el.innerText"))
+            # Fall back to the anchor's own text if the nearest container is unusual.
+            try:
+                anchor_text = normalize(page.locator(f'a[href="{href}"]').first.inner_text())
+                prices = money_values(anchor_text)
+            except Exception:
+                pass
         if prices:
             rows.append({
-                "url": "https://jp.mercari.com" + href if href.startswith("/") else href,
-                "title": text[:300],
+                "url": href,
+                "title": text[:500],
                 "price": prices[0],
             })
         if len(rows) >= 20:
@@ -85,7 +112,7 @@ def browser_lookup(page, query):
 
     prices = sorted(x["price"] for x in rows)
     if not prices:
-        return {"query": query, "url": url, "count": 0, "prices": [], "items": []}
+        return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count}
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
     return {
         "query": query,
@@ -97,6 +124,50 @@ def browser_lookup(page, query):
         "low": min(prices),
         "high": max(prices),
         "items": rows[:10],
+        "anchor_count": anchor_count,
+    }
+
+
+def fallback_sold_keyword_lookup(page, query):
+    # If the dedicated sold/trading filter renders no cards, try the public search
+    # index with explicit sold-language terms. These are fallback signals only.
+    all_rows = []
+    for extra in ["売約済み", "sold out"]:
+        q = f"{query} {extra}"
+        url = "https://jp.mercari.com/search?" + urllib.parse.urlencode({"keyword": q})
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(3500)
+            raw_items = collect_dom_items(page)
+            for raw in raw_items[:80]:
+                text = normalize(raw.get("text", ""))
+                if not text:
+                    continue
+                lowered = text.lower()
+                if "売約済み" not in text and "sold out" not in lowered and "soldout" not in lowered:
+                    continue
+                prices = money_values(text)
+                if prices:
+                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0]})
+        except Exception:
+            continue
+    unique = {}
+    for row in all_rows:
+        unique[row["url"]] = row
+    rows = list(unique.values())[:20]
+    prices = sorted(x["price"] for x in rows)
+    if not prices:
+        return {"count": 0, "prices": [], "items": [], "fallback": True}
+    trimmed = prices[1:-1] if len(prices) >= 5 else prices
+    return {
+        "count": len(prices),
+        "prices": prices,
+        "median": int(statistics.median(prices)),
+        "robust_median": int(statistics.median(trimmed)),
+        "low": min(prices),
+        "high": max(prices),
+        "items": rows[:10],
+        "fallback": True,
     }
 
 
@@ -112,7 +183,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(locale="ja-JP", viewport={"width": 1440, "height": 1000})
-        for item in candidates[:MAX_CHECKS]:
+        for index, item in enumerate(candidates[:MAX_CHECKS]):
             title = normalize(item.get("title", ""))
             if not title:
                 continue
@@ -120,7 +191,12 @@ def main():
             brand = brands[0].get("name", "") if brands else ""
             query = " ".join(x for x in [brand, title] if x)
             try:
-                result = browser_lookup(page, query)
+                result = browser_lookup(page, query, debug=(index == 0))
+                if result.get("count", 0) == 0:
+                    fallback = fallback_sold_keyword_lookup(page, query)
+                    if fallback.get("count", 0) > 0:
+                        result.update(fallback)
+                        result["fallback_used"] = True
             except Exception as exc:
                 result = {"query": query, "url": "", "count": 0, "prices": [], "items": [], "error": repr(exc)}
             best_similarity = 0
@@ -132,14 +208,14 @@ def main():
             result["source_title"] = title
             result["purchase_price"] = item.get("price", 0)
             checked.append(result)
-            print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity)
+            print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False))
             time.sleep(1)
         browser.close()
 
     OUTPUT.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "checked": checked,
-        "note": "ブラウザでレンダリングしたメルカリ売り切れ/取引中検索結果を使用。タイトル一致度のみで、画像一致は未実装。",
+        "note": "ブラウザでメルカリの売り切れ/取引中検索を確認し、0件時は売約済み/sold outキーワード検索をフォールバック。画像一致は未実装。",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
