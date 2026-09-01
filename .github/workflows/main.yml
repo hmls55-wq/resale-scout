@@ -45,6 +45,10 @@ jobs:
         if: success()
         run: python mercari_market.py
 
+      - name: Calculate net resale profit
+        if: success()
+        run: python calculate_profit.py
+
       - name: Build Mercari verification report
         if: always()
         run: python build_verification_report.py
@@ -53,7 +57,7 @@ jobs:
         if: always()
         run: |
           echo "=== generated files ==="
-          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json mercari_debug.* 2>/dev/null || true
+          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json profit_report.md profit_candidates.json mercari_debug.* 2>/dev/null || true
 
       - name: Upload scout report
         if: always()
@@ -65,6 +69,8 @@ jobs:
             resell_candidates.json
             verification_report.md
             mercari_market.json
+            profit_report.md
+            profit_candidates.json
             mercari_debug.txt
             mercari_debug.png
           if-no-files-found: warn
