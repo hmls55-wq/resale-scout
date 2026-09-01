@@ -33,6 +33,10 @@ jobs:
         if: success()
         run: python patch_mercari_region.py
 
+      - name: Capture Mercari API response for debugging
+        if: success()
+        run: python patch_mercari_api_debug.py
+
       - name: Check Mercari sold-market prices
         if: success()
         run: python mercari_market.py
