@@ -10,12 +10,12 @@ INPUT = Path("resell_candidates.json")
 OUTPUT = Path("mercari_market.json")
 DEBUG_SCREENSHOT = Path("mercari_debug.png")
 DEBUG_TEXT = Path("mercari_debug.txt")
-MAX_CHECKS = 1  # まず1件で疎通確認。成功後に5件→15件へ増やす。
+MAX_CHECKS = 1
 MIN_PRICE = 300
 MAX_PRICE = 2_000_000
 PAGE_TIMEOUT_MS = 25000
-WAIT_AFTER_LOAD_MS = 2000
-WAIT_AFTER_SCROLL_MS = 1000
+WAIT_AFTER_LOAD_MS = 1500
+WAIT_AFTER_SCROLL_MS = 700
 
 
 def normalize(s):
@@ -44,13 +44,19 @@ def structured_jpy_prices(text):
     values = []
     if not text:
         return values
-    for match in re.finditer(r'"priceCurrency"\s*:\s*"JPY".{0,300}?"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', text, re.S):
-        try:
-            v = int(float(match.group(1)))
-            if MIN_PRICE <= v <= MAX_PRICE:
-                values.append(v)
-        except ValueError:
-            pass
+    # Accept either property order in JSON-LD / embedded structured data.
+    patterns = [
+        r'"priceCurrency"\s*:\s*"JPY".{0,500}?"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+        r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,500}?"priceCurrency"\s*:\s*"JPY"',
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, re.S):
+            try:
+                v = int(float(match.group(1)))
+                if MIN_PRICE <= v <= MAX_PRICE:
+                    values.append(v)
+            except ValueError:
+                pass
     return values
 
 
@@ -79,42 +85,31 @@ def looks_like_auction(text):
 
 def looks_sold(text):
     t = normalize(text).lower()
-    sold_terms = ["売り切れ", "sold out", "soldout", "取引完了"]
+    sold_terms = ["売り切れ", "sold out", "soldout", "取引完了", "sold"]
     return any(term in t for term in sold_terms)
 
 
 def ensure_japan_region(page):
-    """Mercari can open a region-selection overlay and default to overseas USD.
-    The current UI exposes Japan as an <option>, so select the option value directly.
-    """
     body = normalize(page.locator("body").inner_text())
     if "別の地域の商品を閲覧しています" not in body:
         return False
-
-    # Current Mercari UI: the visible region control is a select with <option value="jp">日本</option>.
     try:
-        selects = page.locator('select')
+        selects = page.locator("select")
         for i in range(selects.count()):
             sel = selects.nth(i)
             try:
                 if sel.locator('option[value="jp"]').count() > 0:
                     sel.select_option("jp")
-                    page.wait_for_timeout(1500)
+                    page.wait_for_timeout(800)
+                    # The selection can update the page asynchronously; reload once so
+                    # the search result is rendered under the Japan locale/currency.
+                    page.reload(wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+                    page.wait_for_timeout(1000)
                     return True
             except Exception:
                 continue
     except Exception as exc:
         print("region select error:", repr(exc))
-
-    # Fallback for a future UI where Japan is rendered as a button/link.
-    try:
-        loc = page.locator('button, a').filter(has_text=re.compile(r"^日本$"))
-        if loc.count() > 0:
-            loc.first.click(timeout=3000)
-            page.wait_for_timeout(1200)
-            return True
-    except Exception as exc:
-        print("region fallback error:", repr(exc))
     return False
 
 
@@ -128,14 +123,17 @@ def collect_dom_items(page):
 def detail_jpy_price(page, href):
     try:
         page.goto(href, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(700)
         ensure_japan_region(page)
-        scripts = page.locator('script').all_inner_texts()
+        body = normalize(page.locator("body").inner_text())
+        # Never accept a price from a detail page unless that item is visibly sold.
+        if looks_like_auction(body) or not looks_sold(body):
+            return None
+        scripts = page.locator("script").all_inner_texts()
         for script in scripts:
             values = structured_jpy_prices(script)
             if values:
                 return values[0]
-        body = normalize(page.locator("body").inner_text())
         values = money_values(body)
         return values[0] if values else None
     except Exception as exc:
@@ -148,8 +146,6 @@ def browser_lookup(page, query, debug=False):
     page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
     page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
     region_changed = ensure_japan_region(page)
-    if region_changed:
-        page.wait_for_timeout(1000)
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
     anchor_count = page.locator('a[href*="/item/"]').count()
@@ -159,33 +155,31 @@ def browser_lookup(page, query, debug=False):
         page.screenshot(path=str(DEBUG_SCREENSHOT), full_page=False)
         print("Mercari debug:", page.url, page.title(), "item anchors=", anchor_count, "region_changed=", region_changed)
         print("Mercari body preview:", body[:1000])
+
     raw_items = collect_dom_items(page)
     rows = []
     seen = set()
-    for raw in raw_items[:120]:
+    # Do not require the sold badge on the search-card DOM: Mercari's card markup can
+    # omit it even when the sold-out search is selected. Verify sold status on detail.
+    for raw in raw_items[:20]:
         href = raw.get("href", "")
         if not href or href in seen:
             continue
         text = normalize(raw.get("text", ""))
-        if not text or looks_like_auction(text) or not looks_sold(text):
+        if not text or looks_like_auction(text):
             continue
         seen.add(href)
-        prices = money_values(text)
-        if not prices:
-            try:
-                anchor_text = normalize(page.locator(f'a[href="{href}"]').first.inner_text())
-                if not looks_like_auction(anchor_text):
-                    prices = money_values(anchor_text)
-            except Exception:
-                pass
-        if not prices:
-            price = detail_jpy_price(page, href)
-            if price:
-                prices = [price]
+        prices = money_values(text) if looks_sold(text) else []
         if prices:
             rows.append({"url": href, "title": text[:500], "price": prices[0], "auction": False, "sold": True})
+            continue
+        # Verify sold state and obtain a JPY price from the item page.
+        price = detail_jpy_price(page, href)
+        if price:
+            rows.append({"url": href, "title": text[:500], "price": price, "auction": False, "sold": True})
         if len(rows) >= 20:
             break
+
     prices = sorted(x["price"] for x in rows)
     if not prices:
         return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True, "region_changed": region_changed}
@@ -203,13 +197,13 @@ def fallback_sold_keyword_lookup(page, query):
             page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
             ensure_japan_region(page)
             raw_items = collect_dom_items(page)
-            for raw in raw_items[:80]:
+            for raw in raw_items[:20]:
                 text = normalize(raw.get("text", ""))
-                if not text or looks_like_auction(text) or not looks_sold(text):
+                if not text or looks_like_auction(text):
                     continue
-                prices = money_values(text)
-                if prices:
-                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0], "auction": False, "sold": True})
+                price = detail_jpy_price(page, raw.get("href", ""))
+                if price:
+                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": price, "auction": False, "sold": True})
         except Exception as exc:
             print("fallback error:", repr(exc))
     unique = {row["url"]: row for row in all_rows if row.get("url")}
@@ -231,8 +225,9 @@ def main():
     checked = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(locale="ja-JP", timezone_id="Asia/Tokyo", geolocation={"latitude": 35.6895, "longitude": 139.6917}, permissions=["geolocation"], extra_http_headers={"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}, viewport={"width": 1440, "height": 1000})
-        page = context.new_page()
+        context = p.chromium.launch if False else p.chromium
+        ctx = browser.new_context(locale="ja-JP", timezone_id="Asia/Tokyo", geolocation={"latitude": 35.6895, "longitude": 139.6917}, permissions=["geolocation"], extra_http_headers={"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}, viewport={"width": 1440, "height": 1000})
+        page = ctx.new_page()
         for index, item in enumerate(candidates[:MAX_CHECKS]):
             title = normalize(item.get("title", ""))
             if not title:
@@ -257,9 +252,9 @@ def main():
             checked.append(result)
             print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False))
             time.sleep(0.5)
-        context.close()
+        ctx.close()
         browser.close()
-    OUTPUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "checked": checked, "note": "メルカリの地域選択が出た場合は日本をselect_optionで明示選択。売り切れバッジをDOM上で確認してsold-onlyを強制。オークション・入札系表示を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。"}, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUTPUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "checked": checked, "note": "メルカリの地域選択が出た場合は日本をselect_optionで明示選択後に1回リロード。売り切れは商品詳細ページで確認し、オークション・入札系を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。"}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
