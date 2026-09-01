@@ -11,21 +11,21 @@ OUTPUT = Path("mercari_market.json")
 DEBUG_SCREENSHOT = Path("mercari_debug.png")
 DEBUG_TEXT = Path("mercari_debug.txt")
 MAX_CHECKS = 5
-MAX_DETAIL_ITEMS = 20
+MAX_DETAIL_ITEMS = 1
 MIN_PRICE = 300
 MAX_PRICE = 2_000_000
 PAGE_TIMEOUT_MS = 20000
 WAIT_AFTER_LOAD_MS = 2500
-WAIT_AFTER_SCROLL_MS = 1500
+WAIT_AFTER_SCROLL_MS = 1200
 
 
 def normalize(s):
-    return re.sub(r"\\s+", " ", str(s or "")).strip()
+    return re.sub(r"\s+", " ", str(s or "")).strip()
 
 
 def money_values(text):
     values=[]
-    for pattern in [r"(?:¥|￥)\\s*([0-9,]+)",r"([0-9]{1,3}(?:,[0-9]{3})+)円",r"(?:^|\\s)([0-9]{3,7})円"]:
+    for pattern in [r"(?:¥|￥)\s*([0-9,]+)",r"([0-9]{1,3}(?:,[0-9]{3})+)円",r"(?:^|\s)([0-9]{3,7})円"]:
         for value in re.findall(pattern,text):
             try:
                 v=int(value.replace(",",""))
@@ -37,10 +37,10 @@ def money_values(text):
 def structured_jpy_prices(text):
     values=[]
     patterns=[
-        r'"priceCurrency"\\s*:\\s*"JPY".{0,1500}?"price"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)',
-        r'"price"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?).{0,1500}?"priceCurrency"\\s*:\\s*"JPY"',
-        r'"currency"\\s*:\\s*"JPY".{0,1500}?"(?:amount|price|value)"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)',
-        r'"(?:amount|price|value)"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?).{0,1500}?"currency"\\s*:\\s*"JPY"'
+        r'"priceCurrency"\s*:\s*"JPY".{0,1500}?"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+        r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"priceCurrency"\s*:\s*"JPY"',
+        r'"currency"\s*:\s*"JPY".{0,1500}?"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
+        r'"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"currency"\s*:\s*"JPY"'
     ]
     for pattern in patterns:
         for match in re.finditer(pattern,text,re.S):
@@ -93,13 +93,32 @@ def ensure_japan_region(page):
 
 
 def collect_dom_items(page):
-    return page.locator('a[href*="/item/"]').evaluate_all("""els => els.map(a => ({href:a.href,text:(a.closest('li')||a.closest('[role=\\"article\\"]')||a.parentElement||a).innerText||''}))""")
+    return page.locator('a[href*="/item/"]').evaluate_all("""els => els.map(a => ({href:a.href,text:(a.closest('li')||a.closest('[role=\"article\"]')||a.parentElement||a).innerText||''}))""")
+
+
+def collect_item_urls_from_html(page):
+    html=page.locator("html").inner_html()
+    found=[]
+    patterns=[r'href=["\']([^"\']*/item/[0-9A-Za-z_-]+[^"\']*)',r'(https://jp\.mercari\.com/item/[0-9A-Za-z_-]+)']
+    for pattern in patterns:
+        for match in re.findall(pattern,html,re.I):
+            href=match if match.startswith("http") else urllib.parse.urljoin(page.url,match)
+            href=href.split("?")[0]
+            if href not in found: found.append(href)
+    return found
+
+
+def item_text_for_url(page,href):
+    try:
+        return normalize(page.locator(f'a[href*="{href.split("/item/")[-1]}"]').first.inner_text())
+    except Exception:
+        return ""
 
 
 def detail_jpy_price(page,href):
     try:
         page.goto(href,wait_until="domcontentloaded",timeout=PAGE_TIMEOUT_MS)
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(800)
         body=normalize(page.locator("body").inner_text())
         if looks_like_auction(body): return None
         sold=looks_sold(body)
@@ -121,28 +140,32 @@ def browser_lookup(page,query,debug=False):
     page.goto(url,wait_until="domcontentloaded",timeout=PAGE_TIMEOUT_MS)
     page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
     region_changed=ensure_japan_region(page)
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(500)
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
-    anchor_count=page.locator('a[href*="/item/"]').count()
-    body=normalize(page.locator("body").inner_text())
+    dom_items=collect_dom_items(page)
+    html_urls=collect_item_urls_from_html(page)
+    anchor_count=len(dom_items); html_url_count=len(html_urls)
     if debug:
-        DEBUG_TEXT.write_text(f"URL={page.url}\nREGION_CHANGED={region_changed}\nITEM_ANCHORS={anchor_count}\nSOLD_WORD={looks_sold(body)}\nBODY={body[:20000]}",encoding="utf-8")
+        body=normalize(page.locator("body").inner_text())
+        DEBUG_TEXT.write_text(f"URL={page.url}\nREGION_CHANGED={region_changed}\nDOM_ITEM_ANCHORS={anchor_count}\nHTML_ITEM_URLS={html_url_count}\nHTML_URL_SAMPLE={html_urls[:5]}\nBODY={body[:20000]}",encoding="utf-8")
         page.screenshot(path=str(DEBUG_SCREENSHOT),full_page=False)
-    rows=[]; seen=set(); checked_links=0
-    for raw in collect_dom_items(page)[:MAX_DETAIL_ITEMS]:
+    candidates=[]; seen=set()
+    for raw in dom_items:
         href=raw.get("href",""); text=normalize(raw.get("text",""))
-        if not href or href in seen or not text or looks_like_auction(text): continue
-        seen.add(href); checked_links+=1
+        if href and href not in seen and text and not looks_like_auction(text):
+            seen.add(href); candidates.append((href,text))
+    for href in html_urls:
+        if href not in seen:
+            seen.add(href); candidates.append((href,""))
+    rows=[]; checked_links=0
+    for href,text in candidates[:MAX_DETAIL_ITEMS]:
+        checked_links+=1
+        if not text: text=item_text_for_url(page,href)
         price=detail_jpy_price(page,href)
-        if price:
-            rows.append({"url":href,"title":text[:500],"price":price,"auction":False,"sold":True})
-            if len(rows)>=10: break
-    prices=sorted(x["price"] for x in rows)
-    if not prices:
-        return {"query":query,"url":url,"count":0,"prices":[],"items":[],"anchor_count":anchor_count,"checked_links":checked_links,"auction_excluded":True,"sold_only_enforced":True,"region_changed":region_changed}
-    median=int(statistics.median(prices))
-    return {"query":query,"url":url,"count":len(prices),"prices":prices,"median":median,"robust_median":median,"low":min(prices),"high":max(prices),"items":rows,"anchor_count":anchor_count,"checked_links":checked_links,"auction_excluded":True,"sold_only_enforced":True,"region_changed":region_changed}
+        rows.append({"url":href,"title":text[:500],"price":price,"auction":False,"sold":price is not None})
+    prices=sorted(x["price"] for x in rows if x.get("price"))
+    return {"query":query,"url":url,"count":len(prices),"prices":prices,"median":int(statistics.median(prices)) if prices else None,"robust_median":int(statistics.median(prices)) if prices else None,"low":min(prices) if prices else None,"high":max(prices) if prices else None,"items":rows,"anchor_count":anchor_count,"html_url_count":html_url_count,"checked_links":checked_links,"auction_excluded":True,"sold_only_enforced":True,"region_changed":region_changed}
 
 
 def main():
@@ -162,9 +185,9 @@ def main():
             best_similarity=max([score_similarity(title,row.get("title","")) for row in result.get("items",[])]+[0])
             result.update({"best_similarity":best_similarity,"source_url":item.get("url"),"source_title":title,"purchase_price":item.get("price",0)})
             checked.append(result)
-            print("メルカリ相場",title,"件数=",result.get("count",0),"価格=",result.get("prices"),"一致度=",best_similarity)
-            time.sleep(0.3)
+            print("メルカリ検索結果",title,"DOM=",result.get("anchor_count"),"HTML=",result.get("html_url_count"),"URL=",[x.get("url") for x in result.get("items",[])],"価格=",result.get("prices"))
+            time.sleep(0.2)
         ctx.close(); browser.close()
-    OUTPUT.write_text(json.dumps({"generated_at":datetime.now().isoformat(timespec="seconds"),"checked":checked,"note":"5候補を確認。各候補は検索結果から最大20商品を詳細確認し、取得できた売却価格を最大10件集計。オークション除外。"},ensure_ascii=False,indent=2),encoding="utf-8")
+    OUTPUT.write_text(json.dumps({"generated_at":datetime.now().isoformat(timespec="seconds"),"checked":checked,"note":"検索結果の商品カード/商品URL取得を最優先で検証。各候補は最初の1商品だけ詳細確認。"},ensure_ascii=False,indent=2),encoding="utf-8")
 
 if __name__ == "__main__":main()
