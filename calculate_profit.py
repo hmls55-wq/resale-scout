@@ -1,6 +1,5 @@
 import json
 import re
-import statistics
 from pathlib import Path
 
 CANDIDATES = Path('resell_candidates.json')
@@ -8,6 +7,7 @@ MARKET = Path('mercari_market.json')
 OUTPUT = Path('profit_report.md')
 JSON_OUTPUT = Path('profit_candidates.json')
 
+# Current Mercari shipping tables used for conservative profit estimates.
 TANOMERU = {
     80: 1700, 120: 2400, 160: 3400, 200: 5000,
     250: 8600, 300: 12000, 350: 18500, 400: 25400, 450: 33000,
@@ -22,21 +22,52 @@ def normalize(s):
     return re.sub(r'\s+', ' ', str(s or '')).strip()
 
 
+def _num(s):
+    return float(s.replace(',', ''))
+
+
 def parse_size(item):
+    """Extract dimensions from Jimoty text regardless of label order."""
     s = ' '.join([
         str(item.get('jmty_description_excerpt') or ''),
         str(item.get('title') or ''),
-    ])
-    patterns = [
-        r'(?:幅|横幅)\s*[約]?\s*(\d+(?:\.\d+)?)\s*cm?[^\n]{0,80}?(?:奥行(?:き)?|奥行)\s*[約]?\s*(\d+(?:\.\d+)?)\s*cm?[^\n]{0,80}?(?:高さ|縦幅)\s*[約]?\s*(\d+(?:\.\d+)?)',
-        r'(?:高さ|縦幅)\s*[約]?\s*(\d+(?:\.\d+)?)\s*cm?[^\n]{0,80}?(?:幅|横幅)\s*[約]?\s*(\d+(?:\.\d+)?)\s*cm?[^\n]{0,80}?(?:奥行(?:き)?|奥行)\s*[約]?\s*(\d+(?:\.\d+)?)',
-        r'(\d+(?:\.\d+)?)\s*[×xX]\s*(\d+(?:\.\d+)?)\s*[×xX]\s*(\d+(?:\.\d+)?)\s*cm?',
-    ]
-    for pat in patterns:
-        m = re.search(pat, s, re.I)
+    ]).replace('　', ' ')
+
+    labels = {
+        'length': r'(?:幅|横幅)',
+        'width': r'(?:奥行(?:き)?)',
+        'height': r'(?:高さ|縦幅)',
+    }
+    values = {}
+    for name, label in labels.items():
+        m = re.search(
+            label + r'\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)\s*(?:cm|センチ)?',
+            s,
+            re.I,
+        )
         if m:
-            vals = [float(x) for x in m.groups()]
-            return {'length': vals[0], 'width': vals[1], 'height': vals[2]}
+            values[name] = _num(m.group(1))
+    if len(values) == 3:
+        return values
+
+    m = re.search(
+        r'(?:幅|横幅)\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)\s*(?:cm|センチ)?\s*[×xX]\s*'
+        r'(?:奥行(?:き)?)\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)\s*(?:cm|センチ)?\s*[×xX]\s*'
+        r'(?:高さ|縦幅)\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)',
+        s,
+        re.I,
+    )
+    if m:
+        return {'length': _num(m.group(1)), 'width': _num(m.group(2)), 'height': _num(m.group(3))}
+
+    m = re.search(
+        r'(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm|センチ)?',
+        s,
+        re.I,
+    )
+    if m:
+        a, b, c = map(_num, m.groups())
+        return {'length': a, 'width': b, 'height': c}
     return None
 
 
@@ -71,7 +102,6 @@ def main():
         title = item.get('jmty_detail_title') or item.get('title') or ''
         result = by_title.get(key(title))
         if not result:
-            # fallback: exact original title
             result = by_title.get(key(item.get('title')))
         if not result:
             continue
@@ -80,12 +110,12 @@ def main():
         prices = [int(x) for x in result.get('prices', []) if x]
         sale = int(result.get('robust_median') or result.get('median') or 0)
         size = item.get('size') or parse_size(item)
+        if size:
+            item['size'] = size
         fee, shipping_label = shipping(size)
         similarity = int(result.get('best_similarity') or 0)
         count = len(prices)
 
-        # Generic/weak queries are deliberately penalized. A median from one
-        # generic result is not treated as a reliable resale estimate.
         confidence = '低'
         if count >= 10 and len(title) >= 6:
             confidence = '中'
@@ -140,11 +170,21 @@ def main():
         profit = f"{r['estimated_profit']:,}円" if r['estimated_profit'] is not None else '算出不可'
         lines.append(f"|{i}|{r['title'][:35]}|{r['purchase_price']:,}円|{sale}|{ship}|{profit}|{r['confidence']}|")
 
-    lines += ['', '## 判定基準', '', '- A: 想定利益10,000円以上', '- B: 想定利益5,000〜9,999円', '- C: 想定利益2,000〜4,999円', '- 見送り: 2,000円未満、または送料・相場の信頼性が不足', '', 'メルカリの販売手数料は販売価格の10%。送料は公式料金表を使用。']
+    lines += [
+        '',
+        '## 判定基準',
+        '',
+        '- A: 想定利益10,000円以上',
+        '- B: 想定利益5,000〜9,999円',
+        '- C: 想定利益2,000〜4,999円',
+        '- 見送り: 2,000円未満、または送料・相場の信頼性が不足',
+        '',
+        'メルカリの販売手数料は販売価格の10%。送料は公式料金表を使用。',
+    ]
     OUTPUT.write_text('\n'.join(lines) + '\n', encoding='utf-8')
     print('profit rows:', len(rows))
     for r in rows[:10]:
-        print(r['title'], 'profit=', r['estimated_profit'], 'shipping=', r['shipping'], 'confidence=', r['confidence'])
+        print(r['title'], 'size=', r['size'], 'profit=', r['estimated_profit'], 'shipping=', r['shipping'], 'confidence=', r['confidence'])
 
 
 if __name__ == '__main__':
