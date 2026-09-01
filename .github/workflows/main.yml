@@ -23,6 +23,10 @@ jobs:
       - name: Run Resell Scout
         run: python scout.py
 
+      - name: Check Mercari sold-market prices
+        if: success()
+        run: python mercari_market.py
+
       - name: Build Mercari verification report
         if: always()
         run: python build_verification_report.py
@@ -31,7 +35,7 @@ jobs:
         if: always()
         run: |
           echo "=== generated files ==="
-          ls -lah resell_report.md resell_candidates.json verification_report.md
+          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json
 
       - name: Upload scout report
         if: always()
@@ -42,5 +46,6 @@ jobs:
             resell_report.md
             resell_candidates.json
             verification_report.md
+            mercari_market.json
           if-no-files-found: error
           retention-days: 7
