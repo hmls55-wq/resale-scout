@@ -84,8 +84,7 @@ def ensure_japan_region(page):
             try:
                 if sel.locator('option[value="jp"]').count()==0: continue
                 result=sel.evaluate("""el => { el.value='jp'; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return el.value; }""")
-                if result=="jp":
-                    page.wait_for_timeout(1000); return True
+                if result=="jp": page.wait_for_timeout(1000); return True
             except Exception: continue
     except Exception as exc: print("region select error:",repr(exc))
     return False
@@ -114,40 +113,30 @@ def detail_jpy_price(page,href):
     try:
         page.goto(href,wait_until="domcontentloaded",timeout=PAGE_TIMEOUT_MS)
         page.wait_for_timeout(1500)
-        body=normalize(page.locator("body").inner_text())
-        html=page.locator("html").inner_html()
+        body=normalize(page.locator("body").inner_text()); html=page.locator("html").inner_html()
         if looks_like_auction(body): return None
-        sold=looks_sold(body)
 
-        # Mercari may render the price in JSON/React state instead of visible text.
-        blobs=[]
-        for script in page.locator("script").all_inner_texts(): blobs.append(script)
-        blobs.append(html)
+        # Mercari can keep the transaction price in JSON/React state even when
+        # the visible page text contains no yen symbol. Check all script blobs,
+        # HTML, then price-specific DOM/meta elements.
+        blobs=page.locator("script").all_inner_texts()+[html]
         for blob in blobs:
             values=structured_jpy_prices(blob)
-            if values:
-                # Prefer a price close to the item's price label when available.
-                return values[0]
+            if values:return values[0]
 
-        # Fallback: inspect common price-bearing DOM elements before the whole body.
-        selectors=[
-            '[data-testid*="price"]','[class*="price"]','[class*="Price"]',
-            'meta[itemprop="price"]','meta[property="product:price:amount"]'
-        ]
+        selectors=['[data-testid*="price"]','[class*="price"]','[class*="Price"]','meta[itemprop="price"]','meta[property="product:price:amount"]']
         dom_text=[]
         for selector in selectors:
             try:
                 loc=page.locator(selector)
                 for i in range(min(loc.count(),20)):
-                    el=loc.nth(i)
-                    dom_text.append(el.get_attribute("content") or el.inner_text(timeout=1000))
+                    el=loc.nth(i); dom_text.append(el.get_attribute("content") or el.inner_text(timeout=1000))
             except Exception: pass
         values=money_values(" ".join(dom_text))
         if values:return values[0]
 
         values=money_values(body)
-        if values and (sold or not any(x in body for x in ["購入手続きへ","購入する","販売中"])):
-            return values[0]
+        if values and (looks_sold(body) or not any(x in body for x in ["購入手続きへ","購入する","販売中"])):return values[0]
     except Exception as exc: print("detail price error:",repr(exc))
     return None
 
@@ -180,12 +169,8 @@ def browser_lookup(page,query,debug=False):
 
 
 def main():
-    from playwright.sync_api import sync_playwright
     data=json.loads(INPUT.read_text(encoding="utf-8")); candidates=data.get("candidates",[]); checked=[]
     with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True)
-        ctx=p.chromium.launch(headless=True)
-        browser.close()
         browser=p.chromium.launch(headless=True)
         context=browser.new_context(locale="ja-JP",timezone_id="Asia/Tokyo",geolocation={"latitude":35.6895,"longitude":139.6917},permissions=["geolocation"],extra_http_headers={"Accept-Language":"ja-JP,ja;q=0.9,en;q=0.8"},viewport={"width":1440,"height":1000})
         page=context.new_page()
