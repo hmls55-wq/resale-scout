@@ -29,6 +29,10 @@ jobs:
       - name: Run Resell Scout
         run: python scout.py
 
+      - name: Enrich Jimoty candidates
+        if: success()
+        run: python enrich_jmty.py
+
       - name: Prepare Mercari market checker
         if: success()
         run: python patch_mercari_region.py
