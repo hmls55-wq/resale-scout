@@ -10,9 +10,12 @@ INPUT = Path("resell_candidates.json")
 OUTPUT = Path("mercari_market.json")
 DEBUG_SCREENSHOT = Path("mercari_debug.png")
 DEBUG_TEXT = Path("mercari_debug.txt")
-MAX_CHECKS = 15
+MAX_CHECKS = 1  # まず1件で疎通確認。成功後に15件へ戻す。
 MIN_PRICE = 300
 MAX_PRICE = 2_000_000
+PAGE_TIMEOUT_MS = 25000
+WAIT_AFTER_LOAD_MS = 2000
+WAIT_AFTER_SCROLL_MS = 1000
 
 
 def normalize(s):
@@ -52,7 +55,6 @@ def score_similarity(source_title, candidate_title):
 
 def looks_like_auction(text):
     t = normalize(text).lower()
-    # Auction listings must never be treated as fixed-price sold comps.
     auction_terms = [
         "オークション", "入札", "入札件数", "入札履歴", "開始価格",
         "現在価格", "最高額", "落札", "auction", "bid", "bids"
@@ -74,10 +76,10 @@ def browser_lookup(page, query, debug=False):
         "keyword": query,
         "status": "sold_out|trading",
     })
-    page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    page.wait_for_timeout(5000)
+    page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+    page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
 
     anchor_count = page.locator('a[href*="/item/"]').count()
     if debug:
@@ -110,31 +112,19 @@ def browser_lookup(page, query, debug=False):
             except Exception:
                 pass
         if prices:
-            rows.append({
-                "url": href,
-                "title": text[:500],
-                "price": prices[0],
-                "auction": False,
-            })
+            rows.append({"url": href, "title": text[:500], "price": prices[0], "auction": False})
         if len(rows) >= 20:
             break
 
     prices = sorted(x["price"] for x in rows)
     if not prices:
-        return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count}
+        return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count, "auction_excluded": True}
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
     return {
-        "query": query,
-        "url": url,
-        "count": len(prices),
-        "prices": prices,
-        "median": int(statistics.median(prices)),
-        "robust_median": int(statistics.median(trimmed)),
-        "low": min(prices),
-        "high": max(prices),
-        "items": rows[:10],
-        "anchor_count": anchor_count,
-        "auction_excluded": True,
+        "query": query, "url": url, "count": len(prices), "prices": prices,
+        "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
+        "low": min(prices), "high": max(prices), "items": rows[:10],
+        "anchor_count": anchor_count, "auction_excluded": True,
     }
 
 
@@ -144,8 +134,8 @@ def fallback_sold_keyword_lookup(page, query):
         q = f"{query} {extra}"
         url = "https://jp.mercari.com/search?" + urllib.parse.urlencode({"keyword": q})
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(3500)
+            page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+            page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
             raw_items = collect_dom_items(page)
             for raw in raw_items[:80]:
                 text = normalize(raw.get("text", ""))
@@ -157,24 +147,20 @@ def fallback_sold_keyword_lookup(page, query):
                 prices = money_values(text)
                 if prices:
                     all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0], "auction": False})
-        except Exception:
+        except Exception as exc:
+            print("fallback error:", repr(exc))
             continue
     unique = {row["url"]: row for row in all_rows}
     rows = list(unique.values())[:20]
     prices = sorted(x["price"] for x in rows)
     if not prices:
-        return {"count": 0, "prices": [], "items": [], "fallback": True}
+        return {"count": 0, "prices": [], "items": [], "fallback": True, "auction_excluded": True}
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
     return {
-        "count": len(prices),
-        "prices": prices,
-        "median": int(statistics.median(prices)),
-        "robust_median": int(statistics.median(trimmed)),
-        "low": min(prices),
-        "high": max(prices),
-        "items": rows[:10],
-        "fallback": True,
-        "auction_excluded": True,
+        "count": len(prices), "prices": prices,
+        "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
+        "low": min(prices), "high": max(prices), "items": rows[:10],
+        "fallback": True, "auction_excluded": True,
     }
 
 
@@ -210,19 +196,21 @@ def main():
             for row in result.get("items", []):
                 row["similarity"] = score_similarity(title, row.get("title", ""))
                 best_similarity = max(best_similarity, row["similarity"])
-            result["best_similarity"] = best_similarity
-            result["source_url"] = item.get("url")
-            result["source_title"] = title
-            result["purchase_price"] = item.get("price", 0)
+            result.update({
+                "best_similarity": best_similarity,
+                "source_url": item.get("url"),
+                "source_title": title,
+                "purchase_price": item.get("price", 0),
+            })
             checked.append(result)
-            print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False), "auction_excluded=", result.get("auction_excluded", True))
-            time.sleep(1)
+            print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False))
+            time.sleep(0.5)
         browser.close()
 
     OUTPUT.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "checked": checked,
-        "note": "ブラウザでメルカリの売り切れ/取引中検索を確認。オークション・入札系表示は実売相場から除外し、0件時は売約済み/sold outキーワード検索をフォールバック。画像一致は未実装。",
+        "note": "まず1件で疎通確認。オークション・入札系表示は相場計算から除外し、0件時は売約済み/sold out検索をフォールバック。成功後に監視件数を増やす。",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
