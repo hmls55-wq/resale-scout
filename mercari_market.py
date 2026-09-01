@@ -40,7 +40,8 @@ def structured_jpy_prices(text):
         r'"priceCurrency"\s*:\s*"JPY".{0,1500}?"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
         r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"priceCurrency"\s*:\s*"JPY"',
         r'"currency"\s*:\s*"JPY".{0,1500}?"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
-        r'"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"currency"\s*:\s*"JPY"'
+        r'"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"currency"\s*:\s*"JPY"',
+        r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)'
     ]
     for pattern in patterns:
         for match in re.finditer(pattern,text,re.S):
@@ -70,7 +71,7 @@ def looks_like_auction(text):
 
 def looks_sold(text):
     t=normalize(text).lower()
-    return any(x in t for x in ["売り切れ","sold out","soldout","取引完了","sold"])
+    return any(x in t for x in ["売り切れ","sold out","soldout","取引完了","sold","購入済み"])
 
 
 def ensure_japan_region(page):
@@ -84,11 +85,9 @@ def ensure_japan_region(page):
                 if sel.locator('option[value="jp"]').count()==0: continue
                 result=sel.evaluate("""el => { el.value='jp'; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return el.value; }""")
                 if result=="jp":
-                    page.wait_for_timeout(1000)
-                    return True
+                    page.wait_for_timeout(1000); return True
             except Exception: continue
-    except Exception as exc:
-        print("region select error:",repr(exc))
+    except Exception as exc: print("region select error:",repr(exc))
     return False
 
 
@@ -97,10 +96,8 @@ def collect_dom_items(page):
 
 
 def collect_item_urls_from_html(page):
-    html=page.locator("html").inner_html()
-    found=[]
-    patterns=[r'href=["\']([^"\']*/item/[0-9A-Za-z_-]+[^"\']*)',r'(https://jp\.mercari\.com/item/[0-9A-Za-z_-]+)']
-    for pattern in patterns:
+    html=page.locator("html").inner_html(); found=[]
+    for pattern in [r'href=["\']([^"\']*/item/[0-9A-Za-z_-]+[^"\']*)',r'(https://jp\.mercari\.com/item/[0-9A-Za-z_-]+)']:
         for match in re.findall(pattern,html,re.I):
             href=match if match.startswith("http") else urllib.parse.urljoin(page.url,match)
             href=href.split("?")[0]
@@ -109,42 +106,58 @@ def collect_item_urls_from_html(page):
 
 
 def item_text_for_url(page,href):
-    try:
-        return normalize(page.locator(f'a[href*="{href.split("/item/")[-1]}"]').first.inner_text())
-    except Exception:
-        return ""
+    try: return normalize(page.locator(f'a[href*="{href.split("/item/")[-1]}"]').first.inner_text())
+    except Exception: return ""
 
 
 def detail_jpy_price(page,href):
     try:
         page.goto(href,wait_until="domcontentloaded",timeout=PAGE_TIMEOUT_MS)
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(1500)
         body=normalize(page.locator("body").inner_text())
+        html=page.locator("html").inner_html()
         if looks_like_auction(body): return None
         sold=looks_sold(body)
-        purchase_words=["購入手続きへ","購入する","販売中"]
-        for script in page.locator("script").all_inner_texts():
-            values=structured_jpy_prices(script)
-            if values and (sold or not any(x in body for x in purchase_words)):
+
+        # Mercari may render the price in JSON/React state instead of visible text.
+        blobs=[]
+        for script in page.locator("script").all_inner_texts(): blobs.append(script)
+        blobs.append(html)
+        for blob in blobs:
+            values=structured_jpy_prices(blob)
+            if values:
+                # Prefer a price close to the item's price label when available.
                 return values[0]
+
+        # Fallback: inspect common price-bearing DOM elements before the whole body.
+        selectors=[
+            '[data-testid*="price"]','[class*="price"]','[class*="Price"]',
+            'meta[itemprop="price"]','meta[property="product:price:amount"]'
+        ]
+        dom_text=[]
+        for selector in selectors:
+            try:
+                loc=page.locator(selector)
+                for i in range(min(loc.count(),20)):
+                    el=loc.nth(i)
+                    dom_text.append(el.get_attribute("content") or el.inner_text(timeout=1000))
+            except Exception: pass
+        values=money_values(" ".join(dom_text))
+        if values:return values[0]
+
         values=money_values(body)
-        if values and (sold or not any(x in body for x in purchase_words)):
+        if values and (sold or not any(x in body for x in ["購入手続きへ","購入する","販売中"])):
             return values[0]
-    except Exception as exc:
-        print("detail price error:",repr(exc))
+    except Exception as exc: print("detail price error:",repr(exc))
     return None
 
 
 def browser_lookup(page,query,debug=False):
     url="https://jp.mercari.com/search?"+urllib.parse.urlencode({"keyword":query,"status":"sold_out"})
-    page.goto(url,wait_until="domcontentloaded",timeout=PAGE_TIMEOUT_MS)
-    page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
-    region_changed=ensure_japan_region(page)
-    page.wait_for_timeout(500)
-    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
-    dom_items=collect_dom_items(page)
-    html_urls=collect_item_urls_from_html(page)
+    page.goto(url,wait_until="domcontentloaded",timeout=PAGE_TIMEOUT_MS); page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
+    region_changed=ensure_japan_region(page); page.wait_for_timeout(500)
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)"); page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
+    dom_items=collect_dom_items(page); html_urls=collect_item_urls_from_html(page)
     anchor_count=len(dom_items); html_url_count=len(html_urls)
     if debug:
         body=normalize(page.locator("body").inner_text())
@@ -153,15 +166,13 @@ def browser_lookup(page,query,debug=False):
     candidates=[]; seen=set()
     for raw in dom_items:
         href=raw.get("href",""); text=normalize(raw.get("text",""))
-        if href and href not in seen and text and not looks_like_auction(text):
-            seen.add(href); candidates.append((href,text))
+        if href and href not in seen and text and not looks_like_auction(text): seen.add(href); candidates.append((href,text))
     for href in html_urls:
-        if href not in seen:
-            seen.add(href); candidates.append((href,""))
+        if href not in seen: seen.add(href); candidates.append((href,""))
     rows=[]; checked_links=0
     for href,text in candidates[:MAX_DETAIL_ITEMS]:
         checked_links+=1
-        if not text: text=item_text_for_url(page,href)
+        if not text:text=item_text_for_url(page,href)
         price=detail_jpy_price(page,href)
         rows.append({"url":href,"title":text[:500],"price":price,"auction":False,"sold":price is not None})
     prices=sorted(x["price"] for x in rows if x.get("price"))
@@ -173,8 +184,11 @@ def main():
     data=json.loads(INPUT.read_text(encoding="utf-8")); candidates=data.get("candidates",[]); checked=[]
     with sync_playwright() as p:
         browser=p.chromium.launch(headless=True)
-        ctx=browser.new_context(locale="ja-JP",timezone_id="Asia/Tokyo",geolocation={"latitude":35.6895,"longitude":139.6917},permissions=["geolocation"],extra_http_headers={"Accept-Language":"ja-JP,ja;q=0.9,en;q=0.8"},viewport={"width":1440,"height":1000})
-        page=ctx.new_page()
+        ctx=p.chromium.launch(headless=True)
+        browser.close()
+        browser=p.chromium.launch(headless=True)
+        context=browser.new_context(locale="ja-JP",timezone_id="Asia/Tokyo",geolocation={"latitude":35.6895,"longitude":139.6917},permissions=["geolocation"],extra_http_headers={"Accept-Language":"ja-JP,ja;q=0.9,en;q=0.8"},viewport={"width":1440,"height":1000})
+        page=context.new_page()
         for index,item in enumerate(candidates[:MAX_CHECKS]):
             title=normalize(item.get("title",""))
             if not title: continue
@@ -187,7 +201,7 @@ def main():
             checked.append(result)
             print("メルカリ検索結果",title,"DOM=",result.get("anchor_count"),"HTML=",result.get("html_url_count"),"URL=",[x.get("url") for x in result.get("items",[])],"価格=",result.get("prices"))
             time.sleep(0.2)
-        ctx.close(); browser.close()
+        context.close(); browser.close()
     OUTPUT.write_text(json.dumps({"generated_at":datetime.now().isoformat(timespec="seconds"),"checked":checked,"note":"検索結果の商品カード/商品URL取得を最優先で検証。各候補は最初の1商品だけ詳細確認。"},ensure_ascii=False,indent=2),encoding="utf-8")
 
 if __name__ == "__main__":main()
