@@ -1,5 +1,4 @@
 import json
-import math
 import re
 import time
 import urllib.request
@@ -7,14 +6,10 @@ from datetime import datetime
 from html import unescape
 from pathlib import Path
 
-# ============================================================
-# Resell Scout
-# ジモティー新着から「仕入れ候補」を抽出するMVP
-# ============================================================
-
 MAX_DISTANCE_KM = 25
 MIN_PROFIT = 5_000
 HIGH_PROFIT = 15_000
+MARKET_CHECK_MAX_PRICE = 5_000
 
 SEARCH_URLS = [
     "https://jmty.jp/aichi/sale-fur",
@@ -33,14 +28,13 @@ PRIORITY_BRANDS = {
         "kartell", "flos", "artemide", "nathan", "ネイサン", "ヤマギワ",
         "マッキントッシュ", "ウェグナー", "wegner", "ボーエ・モーエンセン",
         "ボーエモーエンセン", "kai kristiansen", "カイ・クリスチャンセン",
-        "フィリップ・スタルク", "philippe starck", "フロス", "アルテミデ",
+        "フィリップ・スタルク", "philippe starck",
     ],
     "照明": [
         "le klint", "leklint", "フランク・ロイド・ライト", "frank lloyd wright",
-        "jakobsson lamp", "ヤコブソンランプ", "foscarini", "フォスカリーニ",
-        "nemo", "luceplan", "インゴ・マウラー", "ingo maurer", "dcw editions",
-        "davide groppi", "tom dixon", "verpan", "vibia", "marset", "and tradition",
-        "&tradition", "astep", "lzf", "estiluz", "northern", "muuto",
+        "ヤコブソンランプ", "jakobsson lamp", "foscarini", "フォスカリーニ",
+        "nemo", "luceplan", "インゴ・マウラー", "ingo maurer", "tom dixon",
+        "verpan", "vibia", "marset", "&tradition", "muuto",
     ],
     "高優先": [
         "マルニ", "maruni", "天童木工", "tendo", "無印良品", "muji",
@@ -49,37 +43,42 @@ PRIORITY_BRANDS = {
     ],
 }
 
+# 一般家具も候補に入れ、安い仕入れはメルカリ相場確認へ回す
+MARKET_KEYWORDS = [
+    "椅子", "イス", "チェア", "スツール", "ベンチ", "ソファ", "テーブル", "机", "デスク",
+    "ダイニング", "食器棚", "キャビネット", "サイドボード", "チェスト", "タンス", "箪笥",
+    "本棚", "書棚", "ラック", "シェルフ", "テレビ台", "収納家具", "収納", "ドレッサー",
+    "鏡", "ミラー", "照明", "ライト", "ランプ", "ペンダント", "フロアライト",
+    "木製", "無垢材", "無垢", "北欧", "ヴィンテージ", "ビンテージ", "アンティーク",
+    "昭和レトロ", "レトロ", "デザイナーズ", "家具",
+]
+
 KEYWORDS = [
+    *MARKET_KEYWORDS,
     "アーコール", "ercol", "ルイスポールセン", "louis poulsen", "イームズ", "eames",
     "カリモク", "karimoku", "飛騨産業", "hida sangyo", "ton", "thonet", "kartell",
     "flos", "artemide", "artek", "アルテック", "ジープラン", "g-plan", "nathan", "ネイサン",
     "ヤマギワ", "ウェグナー", "wegner", "モーエンセン", "クリスチャンセン", "スタルク",
     "le klint", "foscarini", "nemo", "luceplan", "tom dixon", "verpan", "vibia", "marset",
-    "muuto", "デザイナーズ", "デザイナーズ家具", "ヴィンテージ家具", "ヴィンテージチェア",
-    "北欧家具", "北欧ヴィンテージ", "デザインチェア", "デザイン照明", "ペンダントライト",
-    "テーブルランプ", "フロアライト",
+    "muuto",
 ]
 
 
 def fetch(url):
-    """ジモティーのHTMLを取得。GitHub Actions向けにUA/Acceptを強化して再試行する。"""
     user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.6 Safari/605.1.15",
     ]
     last_error = None
     for attempt, ua in enumerate(user_agents, 1):
         try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": ua,
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-                    "Cache-Control": "no-cache",
-                    "Referer": "https://jmty.jp/",
-                },
-            )
+            req = urllib.request.Request(url, headers={
+                "User-Agent": ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                "Cache-Control": "no-cache",
+                "Referer": "https://jmty.jp/",
+            })
             with urllib.request.urlopen(req, timeout=30) as response:
                 html = response.read().decode("utf-8", errors="ignore")
                 print(f"  HTTP {response.status}, HTML {len(html):,} bytes")
@@ -97,6 +96,10 @@ def normalize(text):
     text = unescape(text or "")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def strip_tags(text):
+    return normalize(re.sub(r"<[^>]+>", " ", text))
 
 
 def find_brands(text):
@@ -177,25 +180,55 @@ def estimate_sale_price(title, price, brands):
 def evaluate_item(title, price, text, url):
     brands = find_brands(text)
     keywords = keyword_match(text)
+    market_keywords = [k for k in keywords if k in MARKET_KEYWORDS]
     size = extract_size(text)
     size_result = size_ok(size)
-    if size_result is False or (not brands and not keywords):
+
+    if size_result is False:
+        return None
+    if not brands and not keywords:
         return None
 
-    estimated_sale = estimate_sale_price(title, price, brands)
-    net_sale = int(estimated_sale * 0.90)
-    profit = net_sale - price
-    if profit < MIN_PROFIT:
-        return None
+    # ブランド品は従来の利益推定で厳選
+    if brands:
+        estimated_sale = estimate_sale_price(title, price, brands)
+        net_sale = int(estimated_sale * 0.90)
+        profit = net_sale - price
+        if profit < MIN_PROFIT:
+            # 低価格ブランド品は相場確認候補として残す
+            if price > MARKET_CHECK_MAX_PRICE:
+                return None
+            estimated_sale = None
+            net_sale = None
+            profit = None
+            reason = "ブランド品・低仕入れ／メルカリ相場確認"
+        else:
+            reason = "簡易相場推定で利益基準クリア"
+    else:
+        # 一般家具は安いものを相場確認へ回す。ここでは利益を断定しない。
+        if not market_keywords or price > MARKET_CHECK_MAX_PRICE:
+            return None
+        estimated_sale = None
+        net_sale = None
+        profit = None
+        reason = "低価格家具／メルカリ相場確認"
 
     score = 0
     if brands:
-        score += 50 if brands[0]["priority"] == "最優先" else 30 if brands[0]["priority"] == "照明" else 20
-    score += min(len(keywords) * 5, 20)
-    score += 30 if profit >= HIGH_PROFIT else 15
+        score += 60 if brands[0]["priority"] == "最優先" else 40 if brands[0]["priority"] == "照明" else 30
+    score += min(len(keywords) * 5, 25)
+    if price == 0:
+        score += 20
+    elif price <= 1_000:
+        score += 15
+    elif price <= MARKET_CHECK_MAX_PRICE:
+        score += 10
+    if profit is not None:
+        score += 30 if profit >= HIGH_PROFIT else 15
     if size_result is None:
         score -= 5
 
+    urgency = "🔥 緊急" if profit is not None and profit >= HIGH_PROFIT else "🔎 相場確認"
     return {
         "title": title[:120],
         "price": price,
@@ -207,27 +240,21 @@ def evaluate_item(title, price, text, url):
         "size": size,
         "size_ok": size_result,
         "score": score,
-        "urgency": "🔥 緊急" if profit >= HIGH_PROFIT else "⚡ 有力",
+        "urgency": urgency,
+        "reason": reason,
         "url": url,
     }
 
 
 def extract_items(html):
-    """記事リンクを広く拾う。ジモティー側のHTML変更で0件になりにくい実装。"""
+    """商品リンク単位で次の商品リンクまでを1ブロックとして解析する。"""
     html = unescape(html)
     items, seen = [], set()
-
-    # 旧構造/新構造の両方に対応。/article-xxxxx が商品ページ。
-    href_pattern = re.compile(r'''href=["']([^"']*/(?:aichi/)?sale-[^"']*article-[^"']+)["']''', re.I)
+    href_pattern = re.compile(r'''href=["']([^"']*article-[a-z0-9]+)["']''', re.I)
     matches = list(href_pattern.finditer(html))
-    if not matches:
-        # hrefの途中に /s/ 等が入るケースも拾う
-        href_pattern = re.compile(r'''href=["']([^"']*article-[a-z0-9]+)["']''', re.I)
-        matches = list(href_pattern.finditer(html))
-
     print("  商品リンク候補:", len(matches))
 
-    for match in matches:
+    for index, match in enumerate(matches):
         href = match.group(1)
         if href.startswith("/"):
             url = "https://jmty.jp" + href
@@ -240,37 +267,44 @@ def extract_items(html):
             continue
         seen.add(url)
 
-        # アンカー周辺から商品名・価格・説明をまとめて取得
-        start = max(0, match.start() - 600)
-        end = min(len(html), match.end() + 1800)
-        block = html[start:end]
-        clean = normalize(re.sub(r"<[^>]+>", " ", block))
-        price = extract_price(clean)
+        # 同じ商品カード内だけを見る。次の商品リンクを境界にする。
+        end = matches[index + 1].start() if index + 1 < len(matches) else min(len(html), match.end() + 3000)
+        block = html[match.start():end]
+        text = strip_tags(block)
+        price = extract_price(text)
         if price is None:
             continue
 
-        # リンクタグ自身の文字列を優先してタイトル化
+        # アンカー文字列を商品タイトルとして取得
         title = ""
-        a_match = re.search(r'''<a[^>]+href=["']''' + re.escape(href) + r'''["'][^>]*>(.*?)</a>''', html, re.I | re.S)
-        if a_match:
-            title = normalize(re.sub(r"<[^>]+>", " ", a_match.group(1)))
+        anchor = re.search(r'''<a[^>]+href=["']''' + re.escape(href) + r'''["'][^>]*>(.*?)</a>''', block, re.I | re.S)
+        if anchor:
+            title = strip_tags(anchor.group(1))
         if not title:
-            # 商品リンクの直後/直前にあるテキストから短い候補を作る
-            candidates = [x.strip() for x in re.split(r"\s{2,}", clean) if 2 <= len(x.strip()) <= 120]
-            title = candidates[0] if candidates else url.rsplit("/", 1)[-1]
+            title = url.rsplit("/", 1)[-1]
 
-        items.append({"title": title, "price": price, "url": url, "text": clean})
+        items.append({"title": title, "price": price, "url": url, "text": text})
         if len(items) >= 300:
             break
 
     return items
 
 
+def sort_key(item):
+    profit = item.get("estimated_profit")
+    return (-item.get("score", 0), -(profit if isinstance(profit, int) else -1), item.get("price", 0))
+
+
 def write_reports(candidates, total_items):
-    candidates = sorted(candidates, key=lambda x: (-x["score"], -x["estimated_profit"]))
+    candidates = sorted(candidates, key=sort_key)
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "settings": {"max_distance_km": MAX_DISTANCE_KM, "min_profit": MIN_PROFIT, "high_profit": HIGH_PROFIT},
+        "settings": {
+            "max_distance_km": MAX_DISTANCE_KM,
+            "min_profit": MIN_PROFIT,
+            "high_profit": HIGH_PROFIT,
+            "market_check_max_price": MARKET_CHECK_MAX_PRICE,
+        },
         "source_items": total_items,
         "candidates": candidates,
     }
@@ -281,15 +315,20 @@ def write_reports(candidates, total_items):
         f"実行時刻: {payload['generated_at']}",
         f"一覧から取得: {total_items}",
         f"候補数: {len(candidates)}", "",
-        "> 利益は現段階では実売履歴ではなく、簡易相場推定です。", "",
+        "> 🔎 相場確認候補は利益を断定していません。メルカリ検索で相場を確認する前提です。", "",
     ]
     for i, item in enumerate(candidates[:30], 1):
         brands = ", ".join(x["name"] for x in item["brands"]) or "-"
+        profit = item.get("estimated_profit")
+        sale = item.get("estimated_sale_price")
+        profit_text = f"{profit:,}円" if isinstance(profit, int) else "要メルカリ相場確認"
+        sale_text = f"{sale:,}円" if isinstance(sale, int) else "要メルカリ相場確認"
         lines += [
             f"## {i}. {item['urgency']} {item['title']}",
             f"- 仕入れ: {item['price']:,}円",
-            f"- 売価推定: {item['estimated_sale_price']:,}円",
-            f"- 手数料考慮後利益推定: {item['estimated_profit']:,}円",
+            f"- 売価推定: {sale_text}",
+            f"- 利益推定: {profit_text}",
+            f"- 判定理由: {item['reason']}",
             f"- スコア: {item['score']}",
             f"- ブランド: {brands}",
             f"- URL: {item['url']}", "",
@@ -303,6 +342,7 @@ def main():
     print("========================================")
     print("引き取り範囲:", MAX_DISTANCE_KM, "km")
     print("最低利益:", f"{MIN_PROFIT:,}円")
+    print("相場確認対象の仕入れ上限:", f"{MARKET_CHECK_MAX_PRICE:,}円")
 
     candidates = []
     total_items = 0
@@ -325,9 +365,11 @@ def main():
     write_reports(candidates, total_items)
 
     print("一覧から取得:", total_items)
-    print("利益候補:", len(candidates))
-    for item in sorted(candidates, key=lambda x: (-x["score"], -x["estimated_profit"]))[:10]:
-        print(item["urgency"], item["title"], f"仕入れ={item['price']:,}円", f"利益推定={item['estimated_profit']:,}円", f"score={item['score']}")
+    print("利益/相場確認候補:", len(candidates))
+    for item in sorted(candidates, key=sort_key)[:10]:
+        profit = item.get("estimated_profit")
+        profit_text = f"{profit:,}円" if isinstance(profit, int) else "要相場確認"
+        print(item["urgency"], item["title"], f"仕入れ={item['price']:,}円", f"利益={profit_text}", f"score={item['score']}")
 
 
 if __name__ == "__main__":
