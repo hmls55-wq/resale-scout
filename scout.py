@@ -1,6 +1,7 @@
 import json
 import math
 import re
+import time
 import urllib.request
 from datetime import datetime
 from html import unescape
@@ -15,16 +16,11 @@ MAX_DISTANCE_KM = 25
 MIN_PROFIT = 5_000
 HIGH_PROFIT = 15_000
 
-# 自宅付近（距離フィルタを実装するための基準点）
-HOME_LAT = 35.168
-HOME_LON = 136.873
-
 SEARCH_URLS = [
     "https://jmty.jp/aichi/sale-fur",
     "https://jmty.jp/aichi/sale-fur/g-all/a-459-nagoya",
 ]
 
-# プロボックス積載を想定した簡易上限
 MAX_LENGTH_CM = 180
 MAX_WIDTH_CM = 100
 MAX_HEIGHT_CM = 100
@@ -35,10 +31,9 @@ PRIORITY_BRANDS = {
         "イームズ", "eames", "artek", "アルテック", "g-plan", "ジープラン",
         "カリモク", "karimoku", "飛騨産業", "hida sangyo", "ton", "thonet",
         "kartell", "flos", "artemide", "nathan", "ネイサン", "ヤマギワ",
-        "yamag iwa", "マッキントッシュ", "ウェグナー", "wegner",
-        "ボーエ・モーエンセン", "ボーエモーエンセン", "kai kristiansen",
-        "カイ・クリスチャンセン", "フィリップ・スタルク", "philippe starck",
-        "フロス", "アルテミデ",
+        "マッキントッシュ", "ウェグナー", "wegner", "ボーエ・モーエンセン",
+        "ボーエモーエンセン", "kai kristiansen", "カイ・クリスチャンセン",
+        "フィリップ・スタルク", "philippe starck", "フロス", "アルテミデ",
     ],
     "照明": [
         "le klint", "leklint", "フランク・ロイド・ライト", "frank lloyd wright",
@@ -67,14 +62,35 @@ KEYWORDS = [
 
 
 def fetch(url):
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1"
-        },
-    )
-    with urllib.request.urlopen(req, timeout=25) as response:
-        return response.read().decode("utf-8", errors="ignore")
+    """ジモティーのHTMLを取得。GitHub Actions向けにUA/Acceptを強化して再試行する。"""
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+    ]
+    last_error = None
+    for attempt, ua in enumerate(user_agents, 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": ua,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+                    "Cache-Control": "no-cache",
+                    "Referer": "https://jmty.jp/",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=30) as response:
+                html = response.read().decode("utf-8", errors="ignore")
+                print(f"  HTTP {response.status}, HTML {len(html):,} bytes")
+                if len(html) < 5_000:
+                    raise RuntimeError(f"HTMLが短すぎます ({len(html)} bytes)")
+                return html
+        except Exception as exc:
+            last_error = exc
+            print(f"  取得リトライ {attempt}: {exc!r}")
+            time.sleep(2)
+    raise RuntimeError(f"ジモティー取得失敗: {last_error!r}")
 
 
 def normalize(text):
@@ -85,13 +101,13 @@ def normalize(text):
 
 def find_brands(text):
     low = text.lower()
-    found = []
-    seen = set()
+    found, seen = [], set()
     for priority, brands in PRIORITY_BRANDS.items():
         for brand in brands:
-            if brand.lower() in low and brand.lower() not in seen:
+            key = brand.lower()
+            if key in low and key not in seen:
                 found.append({"name": brand, "priority": priority})
-                seen.add(brand.lower())
+                seen.add(key)
     return found
 
 
@@ -102,34 +118,36 @@ def keyword_match(text):
 
 def extract_price(text):
     text = normalize(text)
+    table = str.maketrans("０１２３４５６７８９", "0123456789")
     patterns = [
         r"(?:¥|￥)\s*([0-9０-９][0-9０-９,，]*)",
         r"([0-9０-９][0-9０-９,，]*)\s*円",
-        r"([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+)\s*",
+        r"([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+)\s*円?",
     ]
-    table = str.maketrans("０１２３４５６７８９", "0123456789")
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
             value = match.group(1).translate(table).replace(",", "").replace("，", "")
             try:
                 price = int(value)
-                if 100 <= price <= 2_000_000:
+                if 0 <= price <= 2_000_000:
                     return price
             except ValueError:
                 pass
+    if re.search(r"(?:^|\s)(?:無料|0円)(?:\s|$)", text):
+        return 0
     return None
 
 
 def extract_size(text):
     patterns = [
-        r"(\d{2,3})\s*[×xX]\s*(\d{2,3})\s*[×xX]\s*(\d{2,3})",
-        r"幅\s*(\d{2,3}).{0,15}?奥行(?:き)?\s*(\d{2,3}).{0,15}?高さ\s*(\d{2,3})",
+        r"(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)",
+        r"幅\s*(\d{2,4}).{0,20}?奥行(?:き)?\s*(\d{2,4}).{0,20}?高さ\s*(\d{2,4})",
     ]
     for pattern in patterns:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
-            a, b, c = map(int, m.groups())
+            a, b, c = map(float, m.groups())
             return {"length": a, "width": b, "height": c}
     return None
 
@@ -141,16 +159,7 @@ def size_ok(size):
     return values[0] <= MAX_LENGTH_CM and values[1] <= MAX_WIDTH_CM and values[2] <= MAX_HEIGHT_CM
 
 
-def distance_km(lat1, lon1, lat2, lon2):
-    radius = 6371
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * radius * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
 def estimate_sale_price(title, price, brands):
-    """現段階は相場推定。実売履歴APIではないので「推定」と明記する。"""
     text = title.lower()
     if any(x in text for x in ["アーコール", "ercol"]):
         return max(price * 5, 20_000)
@@ -160,9 +169,8 @@ def estimate_sale_price(title, price, brands):
         return max(price * 3, 12_000)
     if any(x in text for x in ["kartell", "artek", "イームズ", "eames"]):
         return max(price * 4, 15_000)
-    if brands:
-        if brands[0]["priority"] in ["最優先", "照明"]:
-            return max(price * 3, 10_000)
+    if brands and brands[0]["priority"] in ["最優先", "照明"]:
+        return max(price * 3, 10_000)
     return price * 2
 
 
@@ -171,14 +179,10 @@ def evaluate_item(title, price, text, url):
     keywords = keyword_match(text)
     size = extract_size(text)
     size_result = size_ok(size)
-
-    if size_result is False:
-        return None
-    if not brands and not keywords:
+    if size_result is False or (not brands and not keywords):
         return None
 
     estimated_sale = estimate_sale_price(title, price, brands)
-    # メルカリ手数料10%＋送料等を見込んだ保守的な概算
     net_sale = int(estimated_sale * 0.90)
     profit = net_sale - price
     if profit < MIN_PROFIT:
@@ -188,10 +192,7 @@ def evaluate_item(title, price, text, url):
     if brands:
         score += 50 if brands[0]["priority"] == "最優先" else 30 if brands[0]["priority"] == "照明" else 20
     score += min(len(keywords) * 5, 20)
-    if profit >= HIGH_PROFIT:
-        score += 30
-    elif profit >= MIN_PROFIT:
-        score += 15
+    score += 30 if profit >= HIGH_PROFIT else 15
     if size_result is None:
         score -= 5
 
@@ -212,69 +213,75 @@ def evaluate_item(title, price, text, url):
 
 
 def extract_items(html):
-    """一覧ページからリンク周辺のテキストを使って商品候補を作る。
-    DOM依存を減らし、価格がURL slugにない商品も拾えるようにする。
-    """
+    """記事リンクを広く拾う。ジモティー側のHTML変更で0件になりにくい実装。"""
     html = unescape(html)
-    items = []
-    seen = set()
+    items, seen = [], set()
 
-    anchor_pattern = re.compile(
-        r'<a[^>]+href=["\']([^"\']*?/aichi/sale-[^"\']+)["\'][^>]*>(.*?)</a>',
-        re.IGNORECASE | re.DOTALL,
-    )
+    # 旧構造/新構造の両方に対応。/article-xxxxx が商品ページ。
+    href_pattern = re.compile(r'''href=["']([^"']*/(?:aichi/)?sale-[^"']*article-[^"']+)["']''', re.I)
+    matches = list(href_pattern.finditer(html))
+    if not matches:
+        # hrefの途中に /s/ 等が入るケースも拾う
+        href_pattern = re.compile(r'''href=["']([^"']*article-[a-z0-9]+)["']''', re.I)
+        matches = list(href_pattern.finditer(html))
 
-    for match in anchor_pattern.finditer(html):
+    print("  商品リンク候補:", len(matches))
+
+    for match in matches:
         href = match.group(1)
-        anchor_html = match.group(2)
-        url = "https://jmty.jp" + href if href.startswith("/") else href
+        if href.startswith("/"):
+            url = "https://jmty.jp" + href
+        elif href.startswith("http"):
+            url = href
+        else:
+            continue
+        url = url.split("#", 1)[0]
         if url in seen:
             continue
         seen.add(url)
 
-        anchor_text = normalize(re.sub(r"<[^>]+>", " ", anchor_html))
-        start = max(0, match.start() - 700)
-        end = min(len(html), match.end() + 1200)
-        context = normalize(re.sub(r"<[^>]+>", " ", html[start:end]))
-        text = normalize(anchor_text + " " + context)
-
-        price = extract_price(text)
+        # アンカー周辺から商品名・価格・説明をまとめて取得
+        start = max(0, match.start() - 600)
+        end = min(len(html), match.end() + 1800)
+        block = html[start:end]
+        clean = normalize(re.sub(r"<[^>]+>", " ", block))
+        price = extract_price(clean)
         if price is None:
             continue
 
-        title = anchor_text
-        if not title or len(title) < 2:
-            slug = href.rstrip("/").split("/")[-1]
-            title = normalize(slug.replace("-", " "))
+        # リンクタグ自身の文字列を優先してタイトル化
+        title = ""
+        a_match = re.search(r'''<a[^>]+href=["']''' + re.escape(href) + r'''["'][^>]*>(.*?)</a>''', html, re.I | re.S)
+        if a_match:
+            title = normalize(re.sub(r"<[^>]+>", " ", a_match.group(1)))
+        if not title:
+            # 商品リンクの直後/直前にあるテキストから短い候補を作る
+            candidates = [x.strip() for x in re.split(r"\s{2,}", clean) if 2 <= len(x.strip()) <= 120]
+            title = candidates[0] if candidates else url.rsplit("/", 1)[-1]
 
-        items.append({"title": title, "price": price, "url": url, "text": text})
-        if len(items) >= 150:
+        items.append({"title": title, "price": price, "url": url, "text": clean})
+        if len(items) >= 300:
             break
 
     return items
 
 
-def write_reports(candidates):
+def write_reports(candidates, total_items):
     candidates = sorted(candidates, key=lambda x: (-x["score"], -x["estimated_profit"]))
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "settings": {
-            "max_distance_km": MAX_DISTANCE_KM,
-            "min_profit": MIN_PROFIT,
-            "high_profit": HIGH_PROFIT,
-        },
+        "settings": {"max_distance_km": MAX_DISTANCE_KM, "min_profit": MIN_PROFIT, "high_profit": HIGH_PROFIT},
+        "source_items": total_items,
         "candidates": candidates,
     }
     Path("resell_candidates.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lines = [
-        "# Resell Scout 候補レポート",
-        "",
+        "# Resell Scout 候補レポート", "",
         f"実行時刻: {payload['generated_at']}",
-        f"候補数: {len(candidates)}",
-        "",
-        "> 利益は現段階では実売履歴ではなく、簡易相場推定です。",
-        "",
+        f"一覧から取得: {total_items}",
+        f"候補数: {len(candidates)}", "",
+        "> 利益は現段階では実売履歴ではなく、簡易相場推定です。", "",
     ]
     for i, item in enumerate(candidates[:30], 1):
         brands = ", ".join(x["name"] for x in item["brands"]) or "-"
@@ -285,8 +292,7 @@ def write_reports(candidates):
             f"- 手数料考慮後利益推定: {item['estimated_profit']:,}円",
             f"- スコア: {item['score']}",
             f"- ブランド: {brands}",
-            f"- URL: {item['url']}",
-            "",
+            f"- URL: {item['url']}", "",
         ]
     Path("resell_report.md").write_text("\n".join(lines), encoding="utf-8")
 
@@ -300,7 +306,6 @@ def main():
 
     candidates = []
     total_items = 0
-
     for search_url in SEARCH_URLS:
         print("チェック:", search_url)
         try:
@@ -315,23 +320,14 @@ def main():
         except Exception as exc:
             print("取得失敗:", repr(exc))
 
-    unique = {}
-    for item in candidates:
-        unique[item["url"]] = item
+    unique = {item["url"]: item for item in candidates}
     candidates = list(unique.values())
-
-    write_reports(candidates)
+    write_reports(candidates, total_items)
 
     print("一覧から取得:", total_items)
     print("利益候補:", len(candidates))
     for item in sorted(candidates, key=lambda x: (-x["score"], -x["estimated_profit"]))[:10]:
-        print(
-            item["urgency"],
-            item["title"],
-            f"仕入れ={item['price']:,}円",
-            f"利益推定={item['estimated_profit']:,}円",
-            f"score={item['score']}",
-        )
+        print(item["urgency"], item["title"], f"仕入れ={item['price']:,}円", f"利益推定={item['estimated_profit']:,}円", f"score={item['score']}")
 
 
 if __name__ == "__main__":
