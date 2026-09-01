@@ -10,6 +10,10 @@ def mercari_search_url(query: str) -> str:
     return "https://jp.mercari.com/search?keyword=" + quote(query)
 
 
+def money(value):
+    return f"{value:,}円" if isinstance(value, int) else "要メルカリ相場確認"
+
+
 def main():
     if not INPUT.exists():
         raise SystemExit("resell_candidates.json がありません")
@@ -23,8 +27,8 @@ def main():
         f"実行時刻: {data.get('generated_at', '-')}",
         f"候補数: {len(candidates)}",
         "",
-        "> メルカリの自動スクレイピングは行わず、公式の検索画面で候補を確認できるリンクを生成します。",
-        "> 実売価格・売却済み件数・送料は必ず商品ごとに確認してください。",
+        "> 🔎 相場確認候補は、メルカリの検索結果を確認してから仕入れ判断します。",
+        "> 現段階ではメルカリの売却済み履歴を自動取得して利益を断定していません。",
         "",
     ]
 
@@ -35,21 +39,22 @@ def main():
         query_parts = []
         if brands:
             query_parts.append(brands.split(",")[0])
-        if keywords:
+        # ブランドがない一般家具はタイトルを優先して検索
+        query_parts.append(title)
+        if keywords and len(query_parts) < 2:
             query_parts.append(keywords[0])
-        if not query_parts:
-            query_parts.append(title)
-        query = " ".join(dict.fromkeys(query_parts))
+        query = " ".join(dict.fromkeys(x for x in query_parts if x))
 
         lines += [
             f"## {i}. {item.get('urgency', '')} {title}",
             f"- 仕入れ価格: {item.get('price', 0):,}円",
-            f"- 現在の利益推定: {item.get('estimated_profit', 0):,}円",
+            f"- 利益推定: {money(item.get('estimated_profit'))}",
+            f"- 判定理由: {item.get('reason', '-')}",
             f"- スコア: {item.get('score', 0)}",
             f"- 検索キーワード: `{query}`",
             f"- [メルカリで検索]({mercari_search_url(query)})",
             f"- [ジモティー商品]({item.get('url', '#')})",
-            "- 判定: **メルカリ実売履歴を確認 → 仕入れ判断**",
+            "- 判定: **メルカリ相場・送料・状態を確認 → 仕入れ判断**",
             "",
         ]
 
