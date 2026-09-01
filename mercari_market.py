@@ -87,6 +87,36 @@ def looks_sold(text):
     return any(term in t for term in sold_terms)
 
 
+def ensure_japan_region(page):
+    """Mercari can open a region-selection overlay and default to overseas USD.
+    Explicitly choose Japan before reading prices so the scraper never treats USD as JPY.
+    """
+    body = normalize(page.locator("body").inner_text())
+    if "別の地域の商品を閲覧しています" not in body:
+        return False
+
+    # The region dialog currently exposes a visible exact-text 日本 option.
+    try:
+        japan = page.get_by_text("日本", exact=True)
+        if japan.count() > 0:
+            japan.first.click(timeout=3000)
+            page.wait_for_timeout(1200)
+            return True
+    except Exception as exc:
+        print("region selection error:", repr(exc))
+
+    # Fallback: click a button/link whose accessible text is exactly 日本.
+    try:
+        loc = page.locator('button, a').filter(has_text=re.compile(r"^日本$"))
+        if loc.count() > 0:
+            loc.first.click(timeout=3000)
+            page.wait_for_timeout(1200)
+            return True
+    except Exception as exc:
+        print("region fallback error:", repr(exc))
+    return False
+
+
 def collect_dom_items(page):
     return page.locator('a[href*="/item/"]').evaluate_all(
         """els => els.map(a => ({
@@ -101,6 +131,7 @@ def detail_jpy_price(page, href):
     try:
         page.goto(href, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
         page.wait_for_timeout(800)
+        ensure_japan_region(page)
         scripts = page.locator('script').all_inner_texts()
         for script in scripts:
             values = structured_jpy_prices(script)
@@ -121,6 +152,12 @@ def browser_lookup(page, query, debug=False):
     })
     page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
     page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
+
+    region_changed = ensure_japan_region(page)
+    if region_changed:
+        # Region selection can redraw the search page, so wait before collecting DOM.
+        page.wait_for_timeout(1000)
+
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
 
@@ -128,11 +165,11 @@ def browser_lookup(page, query, debug=False):
     if debug:
         body = normalize(page.locator("body").inner_text())
         DEBUG_TEXT.write_text(
-            f"URL={page.url}\nTITLE={page.title()}\nITEM_ANCHORS={anchor_count}\nBODY={body[:12000]}",
+            f"URL={page.url}\nTITLE={page.title()}\nREGION_CHANGED={region_changed}\nITEM_ANCHORS={anchor_count}\nBODY={body[:12000]}",
             encoding="utf-8",
         )
         page.screenshot(path=str(DEBUG_SCREENSHOT), full_page=False)
-        print("Mercari debug:", page.url, page.title(), "item anchors=", anchor_count)
+        print("Mercari debug:", page.url, page.title(), "item anchors=", anchor_count, "region_changed=", region_changed)
         print("Mercari body preview:", body[:1000])
 
     raw_items = collect_dom_items(page)
@@ -168,6 +205,7 @@ def browser_lookup(page, query, debug=False):
         return {
             "query": query, "url": url, "count": 0, "prices": [], "items": [],
             "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True,
+            "region_changed": region_changed,
         }
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
     return {
@@ -175,6 +213,7 @@ def browser_lookup(page, query, debug=False):
         "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
         "low": min(prices), "high": max(prices), "items": rows[:10],
         "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True,
+        "region_changed": region_changed,
     }
 
 
@@ -186,6 +225,7 @@ def fallback_sold_keyword_lookup(page, query):
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
             page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
+            ensure_japan_region(page)
             raw_items = collect_dom_items(page)
             for raw in raw_items[:80]:
                 text = normalize(raw.get("text", ""))
@@ -266,7 +306,7 @@ def main():
     OUTPUT.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "checked": checked,
-        "note": "売り切れバッジをDOM上で確認してsold-onlyを強制。オークション・入札系表示を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。",
+        "note": "メルカリの地域選択が出た場合は日本を明示選択。売り切れバッジをDOM上で確認してsold-onlyを強制。オークション・入札系表示を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
