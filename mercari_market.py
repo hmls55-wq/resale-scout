@@ -10,7 +10,7 @@ INPUT = Path("resell_candidates.json")
 OUTPUT = Path("mercari_market.json")
 DEBUG_SCREENSHOT = Path("mercari_debug.png")
 DEBUG_TEXT = Path("mercari_debug.txt")
-MAX_CHECKS = 1
+MAX_CHECKS = 5
 MIN_PRICE = 300
 MAX_PRICE = 2_000_000
 PAGE_TIMEOUT_MS = 25000
@@ -24,11 +24,7 @@ def normalize(s):
 
 def money_values(text):
     values = []
-    patterns = [
-        r"(?:¥|￥)\s*([0-9,]+)",
-        r"([0-9]{1,3}(?:,[0-9]{3})+)円",
-        r"(?:^|\s)([0-9]{3,7})円",
-    ]
+    patterns = [r"(?:¥|￥)\s*([0-9,]+)", r"([0-9]{1,3}(?:,[0-9]{3})+)円", r"(?:^|\s)([0-9]{3,7})円"]
     for pattern in patterns:
         for value in re.findall(pattern, text):
             try:
@@ -48,7 +44,7 @@ def structured_jpy_prices(text):
         r'"priceCurrency"\s*:\s*"JPY".{0,1500}?"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
         r'"price"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"priceCurrency"\s*:\s*"JPY"',
         r'"currency"\s*:\s*"JPY".{0,1500}?"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?)',
-        r'"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?).{0,1500}?"currency"\s*:\s*"JPY"',
+        r'"(?:amount|price|value)"\s*:\s*([0-9]+(?:\.[0-9]+)?) .{0,1500}?"currency"\s*:\s*"JPY"',
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text, re.S):
@@ -113,10 +109,7 @@ def ensure_japan_region(page):
 
 
 def collect_dom_items(page):
-    return page.locator('a[href*="/item/"]').evaluate_all("""els => els.map(a => ({
-        href: a.href,
-        text: (a.closest('li') || a.closest('[role="article"]') || a.parentElement || a).innerText || ''
-    }))""")
+    return page.locator('a[href*="/item/"]').evaluate_all("""els => els.map(a => ({href: a.href, text: (a.closest('li') || a.closest('[role="article"]') || a.parentElement || a).innerText || ''}))""")
 
 
 def detail_jpy_price(page, href):
@@ -126,26 +119,16 @@ def detail_jpy_price(page, href):
         ensure_japan_region(page)
         body = normalize(page.locator("body").inner_text())
         scripts = page.locator("script").all_inner_texts()
-
-        # Never use auction/offer pages. For a sold-out search, the detail page is
-        # authoritative when it exposes a sold/completed marker.
         if looks_like_auction(body):
             return None
-
-        # Prefer structured JPY data even when the visible UI is localized to USD.
         for script in scripts:
             values = structured_jpy_prices(script)
             if values:
                 if looks_sold(body):
                     return values[0]
-                # Some Mercari detail pages omit the sold badge after navigation.
-                # The caller reached this URL from the sold-out search, so accept the
-                # structured JPY price only when the page has no active-sale signals.
                 active_terms = ["購入手続きへ", "購入する", "カートに入れる", "出品者から購入", "販売中"]
                 if not any(term in body for term in active_terms):
                     return values[0]
-
-        # Fallback: visible JPY price. Never parse US$ as yen.
         values = money_values(body)
         if values and (looks_sold(body) or not any(x in body for x in ["購入手続きへ", "購入する", "販売中"])):
             return values[0]
@@ -169,7 +152,6 @@ def browser_lookup(page, query, debug=False):
         page.screenshot(path=str(DEBUG_SCREENSHOT), full_page=False)
         print("Mercari debug:", page.url, page.title(), "item anchors=", anchor_count, "region_changed=", region_changed)
         print("Mercari body preview:", body[:1000])
-
     raw_items = collect_dom_items(page)
     rows = []
     seen = set()
@@ -181,14 +163,11 @@ def browser_lookup(page, query, debug=False):
         if not text or looks_like_auction(text):
             continue
         seen.add(href)
-        # The search UI has been observed to ignore the sold-out filter visually,
-        # so do not trust card badges. Verify the item page itself.
         price = detail_jpy_price(page, href)
         if price:
             rows.append({"url": href, "title": text[:500], "price": price, "auction": False, "sold": True})
         if len(rows) >= 20:
             break
-
     prices = sorted(x["price"] for x in rows)
     if not prices:
         return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True, "region_changed": region_changed}
@@ -229,7 +208,7 @@ def main():
             time.sleep(0.5)
         ctx.close()
         browser.close()
-    OUTPUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "checked": checked, "note": "売り切れ検索URLをsold_outに限定。検索画面の表示フィルターは信用せず商品詳細を確認し、オークション・入札系を除外。価格は商品詳細のJPY構造化データを最優先し、次に画面上の¥/円だけを採用。USDは円として扱わない。まず1件で疎通確認。"}, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUTPUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "checked": checked, "note": "売り切れ検索URLをsold_outに限定。検索画面の表示フィルターは信用せず商品詳細を確認し、オークション・入札系を除外。価格は商品詳細のJPY構造化データを最優先し、次に画面上の¥/円だけを採用。USDは円として扱わない。5件で検証。"}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
