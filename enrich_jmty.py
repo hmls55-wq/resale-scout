@@ -54,18 +54,58 @@ def title_from(html, fallback):
     return fallback
 
 
+def _num(s):
+    return float(s.replace(',', ''))
+
+
 def find_size(text):
+    """Extract dimensions from Japanese prose in any label order.
+
+    Handles forms such as:
+      横幅:91cm 縦幅:90cm 奥行:40cm
+      幅約46.5cm×奥行き約30cm×高さ約70cm
+      91×40×90cm
+    """
     text = text.replace('　', ' ')
-    patterns = [
-        r'(?:幅|横幅)\s*[約]?\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm)?[^\n]{0,80}?(?:奥行(?:き)?|奥行)\s*[約]?\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm)?[^\n]{0,80}?(?:高さ|縦幅)\s*[約]?\s*(\d{2,4}(?:\.\d+)?)',
-        r'(?:高さ|縦幅)\s*[約]?\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm)?[^\n]{0,80}?(?:幅|横幅)\s*[約]?\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm)?[^\n]{0,80}?(?:奥行(?:き)?|奥行)\s*[約]?\s*(\d{2,4}(?:\.\d+)?)',
-        r'(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm)?',
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, re.I)
+
+    # 1) Explicit labels. Order is intentionally irrelevant.
+    labels = {
+        'length': r'(?:幅|横幅)',
+        'width': r'(?:奥行(?:き)?)',
+        'height': r'(?:高さ|縦幅)',
+    }
+    values = {}
+    for name, label in labels.items():
+        m = re.search(
+            label + r'\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)\s*(?:cm|センチ)?',
+            text,
+            re.I,
+        )
         if m:
-            a, b, c = map(float, m.groups())
-            return {'length': a, 'width': b, 'height': c}
+            values[name] = _num(m.group(1))
+    if len(values) == 3:
+        return values
+
+    # 2) Three labeled values separated by ×, allowing labels on each value.
+    m = re.search(
+        r'(?:幅|横幅)\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)\s*(?:cm|センチ)?\s*[×xX]\s*'
+        r'(?:奥行(?:き)?)\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)\s*(?:cm|センチ)?\s*[×xX]\s*'
+        r'(?:高さ|縦幅)\s*(?:[:：=]|は)?\s*約?\s*(\d{1,4}(?:\.\d+)?)',
+        text,
+        re.I,
+    )
+    if m:
+        return {'length': _num(m.group(1)), 'width': _num(m.group(2)), 'height': _num(m.group(3))}
+
+    # 3) Unlabeled dimensions such as 91×40×90cm.
+    m = re.search(
+        r'(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*[×xX]\s*(\d{2,4}(?:\.\d+)?)\s*(?:cm|センチ)?',
+        text,
+        re.I,
+    )
+    if m:
+        a, b, c = map(_num, m.groups())
+        return {'length': a, 'width': b, 'height': c}
     return None
 
 
@@ -73,6 +113,7 @@ def main():
     data = json.loads(INPUT.read_text(encoding='utf-8'))
     candidates = data.get('candidates', [])
     enriched = 0
+    sizes_found = 0
     for item in candidates:
         url = item.get('url')
         if not url:
@@ -91,6 +132,7 @@ def main():
             item['jmty_description_excerpt'] = body[:1200]
             if size:
                 item['size'] = size
+                sizes_found += 1
             if image and image.startswith('http'):
                 urls = item.get('image_urls') or []
                 item['image_urls'] = list(dict.fromkeys([image] + urls))[:5]
@@ -99,8 +141,9 @@ def main():
             print('enrich error', url, repr(exc))
         time.sleep(0.15)
     data['enriched_jmty_details'] = enriched
+    data['sizes_found'] = sizes_found
     INPUT.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-    print('enriched Jimoty detail pages:', enriched)
+    print('enriched Jimoty detail pages:', enriched, 'sizes found:', sizes_found)
 
 
 if __name__ == '__main__':
