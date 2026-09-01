@@ -31,18 +31,26 @@ def meta(html, prop):
     return unescape(m.group(1)).strip() if m else ''
 
 
+def clean_listing_title(raw, fallback):
+    t = re.sub(r'\s+', ' ', raw or '').strip()
+    t = re.sub(r'\s*[-|｜]\s*ジモティー.*$', '', t, flags=re.I).strip()
+    t = re.split(r'\s*[（(][^）)]*[）)]', t, maxsplit=1)[0].strip()
+    t = re.split(r'\s+[^\s]+の(?:収納家具|家具|寝具|家電|インテリア|雑貨|その他)《', t, maxsplit=1)[0].strip()
+    t = re.sub(r'\s+中古あげます・譲ります.*$', '', t).strip()
+    return (t or fallback or '').strip()[:160]
+
+
 def title_from(html, fallback):
     og = meta(html, 'og:title')
     if og:
-        og = re.sub(r'\s*[-|｜]\s*ジモティー.*$', '', og, flags=re.I).strip()
-        if len(og) >= 3:
-            return og[:160]
+        title = clean_listing_title(og, fallback)
+        if len(title) >= 3:
+            return title
     m = re.search(r'<title[^>]*>(.*?)</title>', html, re.I | re.S)
     if m:
-        t = clean_html(m.group(1))
-        t = re.sub(r'\s*[-|｜]\s*ジモティー.*$', '', t, flags=re.I).strip()
-        if len(t) >= 3:
-            return t[:160]
+        title = clean_listing_title(clean_html(m.group(1)), fallback)
+        if len(title) >= 3:
+            return title
     return fallback
 
 
@@ -76,7 +84,7 @@ def main():
             body = clean_html(html)
             size = find_size(body)
             image = meta(html, 'og:image')
-            if title and len(title) >= len(item.get('title', '')):
+            if title and len(title) >= 3:
                 item['title'] = title
             item['jmty_detail_title'] = title
             item['jmty_description_excerpt'] = body[:1200]
