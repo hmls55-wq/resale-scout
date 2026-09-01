@@ -4,6 +4,7 @@ import time
 import urllib.request
 from datetime import datetime
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 
 MAX_DISTANCE_KM = 25
@@ -125,7 +126,7 @@ def estimate_sale_price(title, price, brands):
     return price * 2
 
 
-def evaluate_item(title, price, text, url):
+def evaluate_item(title, price, text, url, image_urls=None):
     brands = find_brands(text)
     keywords = keyword_match(text)
     market_keywords = [k for k in keywords if k in MARKET_KEYWORDS]
@@ -158,24 +159,65 @@ def evaluate_item(title, price, text, url):
         "title": title[:120], "price": price, "estimated_sale_price": estimated_sale, "estimated_net_sale": estimated_net,
         "estimated_profit": profit, "brands": brands, "keywords": keywords, "size": size, "size_ok": size_result,
         "score": score, "urgency": "🔥 緊急" if isinstance(profit, int) and profit >= HIGH_PROFIT else "🔎 相場確認",
-        "reason": reason, "url": url,
+        "reason": reason, "url": url, "image_urls": image_urls or [],
+        "mercari_search_url": "https://jp.mercari.com/search?keyword=" + urllib.parse.quote(title[:80]),
+        "google_lens_url": "https://lens.google.com/uploadbyurl?url=" + urllib.parse.quote(image_urls[0], safe="") if image_urls else None,
     }
 
 
-def extract_items(html):
-    # 実際のジモティーHTMLでは商品カード周辺に価格・タイトル・カテゴリがあるため、
-    # articleリンクの前後を広めに読む。前バージョンで100件取得できた方式を維持する。
-    html = unescape(html)
-    items, seen = [], set()
-    pattern = re.compile(r'''href=["']([^"']*/(?:aichi/)?sale-[^"']*article-[^"']+)["']''', re.I)
-    matches = list(pattern.finditer(html))
-    if not matches:
-        pattern = re.compile(r'''href=["']([^"']*article-[a-z0-9]+)["']''', re.I)
-        matches = list(pattern.finditer(html))
-    print("  商品リンク候補:", len(matches))
+class JmtyAnchorParser(HTMLParser):
+    """ジモティーの一覧カードから article リンクのタイトルと画像を正確に拾う。"""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.items = []
+        self.current = None
+        self.in_anchor = False
+        self.anchor_depth = 0
 
-    for match in matches:
-        href = match.group(1)
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        href = attrs.get("href", "")
+        if tag.lower() == "a" and "article-" in href:
+            self.current = {"href": href, "title_attr": attrs.get("aria-label") or attrs.get("title") or "", "text": [], "images": []}
+            self.in_anchor = True
+            self.anchor_depth = 1
+            return
+        if self.in_anchor:
+            self.anchor_depth += 1
+            if tag.lower() == "img":
+                src = attrs.get("src") or attrs.get("data-src") or attrs.get("data-lazy-src")
+                if src:
+                    self.current["images"].append(src)
+
+    def handle_endtag(self, tag):
+        if self.in_anchor:
+            if tag.lower() == "a":
+                self.anchor_depth -= 1
+                if self.anchor_depth <= 0:
+                    self.current["text"] = normalize(" ".join(self.current["text"]))
+                    self.items.append(self.current)
+                    self.current = None
+                    self.in_anchor = False
+            else:
+                self.anchor_depth = max(1, self.anchor_depth - 1)
+
+    def handle_data(self, data):
+        if self.in_anchor and self.current is not None:
+            text = normalize(data)
+            if text:
+                self.current["text"].append(text)
+
+
+def extract_items(html):
+    html = unescape(html)
+    parser = JmtyAnchorParser()
+    parser.feed(html)
+    anchors = parser.items
+    print("  商品リンク候補:", len(anchors))
+    items, seen = [], set()
+
+    for anchor in anchors:
+        href = anchor["href"]
         url = "https://jmty.jp" + href if href.startswith("/") else href if href.startswith("http") else None
         if not url:
             continue
@@ -183,21 +225,39 @@ def extract_items(html):
         if url in seen:
             continue
         seen.add(url)
-        start = max(0, match.start() - 600)
-        end = min(len(html), match.end() + 1800)
+
+        # リンク周辺から価格・状態・カテゴリ・画像を拾う
+        pos = html.find(href)
+        start = max(0, pos - 700)
+        end = min(len(html), pos + 3000)
         block = html[start:end]
         clean = normalize(re.sub(r"<[^>]+>", " ", block))
+
+        # 受付終了・掲載終了などは除外
+        if re.search(r"受付終了|掲載終了|募集終了|取引終了", clean):
+            continue
         price = extract_price(clean)
         if price is None:
             continue
-        title = ""
-        a_match = re.search(r'''<a[^>]+href=["']''' + re.escape(href) + r'''["'][^>]*>(.*?)</a>''', html, re.I | re.S)
-        if a_match:
-            title = normalize(re.sub(r"<[^>]+>", " ", a_match.group(1)))
+
+        title = anchor["text"] or normalize(anchor["title_attr"])
+        if not title or title.startswith("お気に入り"):
+            # aria/titleがない場合でも、カード直後のテキストから商品名を推定
+            title_candidates = re.findall(r"(?:^| )([^ ]{2,120}?)(?=\s+(?:[0-9０-９,，]+円|0円|無料))", clean)
+            title = title_candidates[0].strip() if title_candidates else ""
         if not title:
-            candidates = [x.strip() for x in re.split(r"\s{2,}", clean) if 2 <= len(x.strip()) <= 120]
-            title = candidates[0] if candidates else url.rsplit("/", 1)[-1]
-        items.append({"title": title, "price": price, "url": url, "text": clean})
+            # 最終手段として article ID を残すが、旧実装のように全件ID化しない
+            title = url.rsplit("/", 1)[-1]
+
+        image_urls = []
+        for src in anchor.get("images", []):
+            if src.startswith("//"):
+                src = "https:" + src
+            elif src.startswith("/"):
+                src = "https://jmty.jp" + src
+            if src.startswith("http") and src not in image_urls:
+                image_urls.append(src)
+        items.append({"title": title, "price": price, "url": url, "text": clean, "image_urls": image_urls[:5]})
         if len(items) >= 300:
             break
     return items
@@ -216,7 +276,7 @@ def write_reports(candidates, total_items):
     for i, item in enumerate(candidates[:30], 1):
         sale = item.get("estimated_sale_price")
         profit = item.get("estimated_profit")
-        lines += [f"## {i}. {item['urgency']} {item['title']}", f"- 仕入れ: {item['price']:,}円", f"- 売価推定: {sale:,}円" if isinstance(sale, int) else "- 売価推定: 要メルカリ相場確認", f"- 利益推定: {profit:,}円" if isinstance(profit, int) else "- 利益推定: 要メルカリ相場確認", f"- 判定理由: {item['reason']}", f"- スコア: {item['score']}", f"- URL: {item['url']}", ""]
+        lines += [f"## {i}. {item['urgency']} {item['title']}", f"- 仕入れ: {item['price']:,}円", f"- 売価推定: {sale:,}円" if isinstance(sale, int) else "- 売価推定: 要メルカリ相場確認", f"- 利益推定: {profit:,}円" if isinstance(profit, int) else "- 利益推定: 要メルカリ相場確認", f"- 判定理由: {item['reason']}", f"- スコア: {item['score']}", f"- メルカリ検索: {item.get('mercari_search_url')}", f"- Google Lens: {item.get('google_lens_url') or '画像URLなし'}", f"- URL: {item['url']}", ""]
     Path("resell_report.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -236,8 +296,9 @@ def main():
             total_items += len(items)
             print("取得候補:", len(items))
             for item in items:
-                result = evaluate_item(item["title"], item["price"], item["text"], item["url"])
-                if result: candidates.append(result)
+                result = evaluate_item(item["title"], item["price"], item["text"], item["url"], item.get("image_urls"))
+                if result:
+                    candidates.append(result)
         except Exception as exc:
             print("取得失敗:", repr(exc))
     candidates = list({x["url"]: x for x in candidates}.values())
