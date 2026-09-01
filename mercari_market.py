@@ -41,7 +41,6 @@ def money_values(text):
 
 
 def structured_jpy_prices(text):
-    """Extract JPY prices from embedded JSON/JSON-LD without treating USD as JPY."""
     values = []
     if not text:
         return values
@@ -74,10 +73,7 @@ def score_similarity(source_title, candidate_title):
 
 def looks_like_auction(text):
     t = normalize(text).lower()
-    auction_terms = [
-        "オークション", "入札", "入札件数", "入札履歴", "開始価格",
-        "現在価格", "最高額", "落札", "auction", "bid", "bids"
-    ]
+    auction_terms = ["オークション", "入札", "入札件数", "入札履歴", "開始価格", "現在価格", "最高額", "落札", "auction", "bid", "bids"]
     return any(term in t for term in auction_terms)
 
 
@@ -89,23 +85,28 @@ def looks_sold(text):
 
 def ensure_japan_region(page):
     """Mercari can open a region-selection overlay and default to overseas USD.
-    Explicitly choose Japan before reading prices so the scraper never treats USD as JPY.
+    The current UI exposes Japan as an <option>, so select the option value directly.
     """
     body = normalize(page.locator("body").inner_text())
     if "別の地域の商品を閲覧しています" not in body:
         return False
 
-    # The region dialog currently exposes a visible exact-text 日本 option.
+    # Current Mercari UI: the visible region control is a select with <option value="jp">日本</option>.
     try:
-        japan = page.get_by_text("日本", exact=True)
-        if japan.count() > 0:
-            japan.first.click(timeout=3000)
-            page.wait_for_timeout(1200)
-            return True
+        selects = page.locator('select')
+        for i in range(selects.count()):
+            sel = selects.nth(i)
+            try:
+                if sel.locator('option[value="jp"]').count() > 0:
+                    sel.select_option("jp")
+                    page.wait_for_timeout(1500)
+                    return True
+            except Exception:
+                continue
     except Exception as exc:
-        print("region selection error:", repr(exc))
+        print("region select error:", repr(exc))
 
-    # Fallback: click a button/link whose accessible text is exactly 日本.
+    # Fallback for a future UI where Japan is rendered as a button/link.
     try:
         loc = page.locator('button, a').filter(has_text=re.compile(r"^日本$"))
         if loc.count() > 0:
@@ -118,16 +119,13 @@ def ensure_japan_region(page):
 
 
 def collect_dom_items(page):
-    return page.locator('a[href*="/item/"]').evaluate_all(
-        """els => els.map(a => ({
-            href: a.href,
-            text: (a.closest('li') || a.closest('[role="article"]') || a.parentElement || a).innerText || ''
-        }))"""
-    )
+    return page.locator('a[href*="/item/"]').evaluate_all("""els => els.map(a => ({
+        href: a.href,
+        text: (a.closest('li') || a.closest('[role="article"]') || a.parentElement || a).innerText || ''
+    }))""")
 
 
 def detail_jpy_price(page, href):
-    """Open an item detail page and prefer structured JPY price data."""
     try:
         page.goto(href, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
         page.wait_for_timeout(800)
@@ -146,32 +144,21 @@ def detail_jpy_price(page, href):
 
 
 def browser_lookup(page, query, debug=False):
-    url = "https://jp.mercari.com/search?" + urllib.parse.urlencode({
-        "keyword": query,
-        "status": "sold_out|trading",
-    })
+    url = "https://jp.mercari.com/search?" + urllib.parse.urlencode({"keyword": query, "status": "sold_out|trading"})
     page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
     page.wait_for_timeout(WAIT_AFTER_LOAD_MS)
-
     region_changed = ensure_japan_region(page)
     if region_changed:
-        # Region selection can redraw the search page, so wait before collecting DOM.
         page.wait_for_timeout(1000)
-
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(WAIT_AFTER_SCROLL_MS)
-
     anchor_count = page.locator('a[href*="/item/"]').count()
     if debug:
         body = normalize(page.locator("body").inner_text())
-        DEBUG_TEXT.write_text(
-            f"URL={page.url}\nTITLE={page.title()}\nREGION_CHANGED={region_changed}\nITEM_ANCHORS={anchor_count}\nBODY={body[:12000]}",
-            encoding="utf-8",
-        )
+        DEBUG_TEXT.write_text(f"URL={page.url}\nTITLE={page.title()}\nREGION_CHANGED={region_changed}\nITEM_ANCHORS={anchor_count}\nBODY={body[:12000]}", encoding="utf-8")
         page.screenshot(path=str(DEBUG_SCREENSHOT), full_page=False)
         print("Mercari debug:", page.url, page.title(), "item anchors=", anchor_count, "region_changed=", region_changed)
         print("Mercari body preview:", body[:1000])
-
     raw_items = collect_dom_items(page)
     rows = []
     seen = set()
@@ -199,22 +186,11 @@ def browser_lookup(page, query, debug=False):
             rows.append({"url": href, "title": text[:500], "price": prices[0], "auction": False, "sold": True})
         if len(rows) >= 20:
             break
-
     prices = sorted(x["price"] for x in rows)
     if not prices:
-        return {
-            "query": query, "url": url, "count": 0, "prices": [], "items": [],
-            "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True,
-            "region_changed": region_changed,
-        }
+        return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True, "region_changed": region_changed}
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
-    return {
-        "query": query, "url": url, "count": len(prices), "prices": prices,
-        "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
-        "low": min(prices), "high": max(prices), "items": rows[:10],
-        "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True,
-        "region_changed": region_changed,
-    }
+    return {"query": query, "url": url, "count": len(prices), "prices": prices, "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)), "low": min(prices), "high": max(prices), "items": rows[:10], "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True, "region_changed": region_changed}
 
 
 def fallback_sold_keyword_lookup(page, query):
@@ -236,19 +212,13 @@ def fallback_sold_keyword_lookup(page, query):
                     all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0], "auction": False, "sold": True})
         except Exception as exc:
             print("fallback error:", repr(exc))
-            continue
     unique = {row["url"]: row for row in all_rows if row.get("url")}
     rows = list(unique.values())[:20]
     prices = sorted(x["price"] for x in rows)
     if not prices:
         return {"count": 0, "prices": [], "items": [], "fallback": True, "auction_excluded": True, "sold_only_enforced": True}
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
-    return {
-        "count": len(prices), "prices": prices,
-        "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
-        "low": min(prices), "high": max(prices), "items": rows[:10],
-        "fallback": True, "auction_excluded": True, "sold_only_enforced": True,
-    }
+    return {"count": len(prices), "prices": prices, "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)), "low": min(prices), "high": max(prices), "items": rows[:10], "fallback": True, "auction_excluded": True, "sold_only_enforced": True}
 
 
 def main():
@@ -256,20 +226,12 @@ def main():
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise SystemExit("playwright is required")
-
     data = json.loads(INPUT.read_text(encoding="utf-8"))
     candidates = data.get("candidates", [])
     checked = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            locale="ja-JP",
-            timezone_id="Asia/Tokyo",
-            geolocation={"latitude": 35.6895, "longitude": 139.6917},
-            permissions=["geolocation"],
-            extra_http_headers={"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"},
-            viewport={"width": 1440, "height": 1000},
-        )
+        context = browser.new_context(locale="ja-JP", timezone_id="Asia/Tokyo", geolocation={"latitude": 35.6895, "longitude": 139.6917}, permissions=["geolocation"], extra_http_headers={"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"}, viewport={"width": 1440, "height": 1000})
         page = context.new_page()
         for index, item in enumerate(candidates[:MAX_CHECKS]):
             title = normalize(item.get("title", ""))
@@ -291,23 +253,13 @@ def main():
             for row in result.get("items", []):
                 row["similarity"] = score_similarity(title, row.get("title", ""))
                 best_similarity = max(best_similarity, row["similarity"])
-            result.update({
-                "best_similarity": best_similarity,
-                "source_url": item.get("url"),
-                "source_title": title,
-                "purchase_price": item.get("price", 0),
-            })
+            result.update({"best_similarity": best_similarity, "source_url": item.get("url"), "source_title": title, "purchase_price": item.get("price", 0)})
             checked.append(result)
             print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False))
             time.sleep(0.5)
         context.close()
         browser.close()
-
-    OUTPUT.write_text(json.dumps({
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "checked": checked,
-        "note": "メルカリの地域選択が出た場合は日本を明示選択。売り切れバッジをDOM上で確認してsold-onlyを強制。オークション・入札系表示を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。",
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    OUTPUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "checked": checked, "note": "メルカリの地域選択が出た場合は日本をselect_optionで明示選択。売り切れバッジをDOM上で確認してsold-onlyを強制。オークション・入札系表示を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。"}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
