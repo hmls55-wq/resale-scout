@@ -10,7 +10,7 @@ INPUT = Path("resell_candidates.json")
 OUTPUT = Path("mercari_market.json")
 DEBUG_SCREENSHOT = Path("mercari_debug.png")
 DEBUG_TEXT = Path("mercari_debug.txt")
-MAX_CHECKS = 1  # まず1件で疎通確認。成功後に15件へ戻す。
+MAX_CHECKS = 1  # まず1件で疎通確認。成功後に5件→15件へ増やす。
 MIN_PRICE = 300
 MAX_PRICE = 2_000_000
 PAGE_TIMEOUT_MS = 25000
@@ -24,15 +24,34 @@ def normalize(s):
 
 def money_values(text):
     values = []
-    for raw in re.findall(r"(?:¥|￥)\s*([0-9,]+)|([0-9]{1,3}(?:,[0-9]{3})+)円|(?:^|\s)([0-9]{3,7})円", text):
-        value = next((x for x in raw if x), None)
-        if value:
+    patterns = [
+        r"(?:¥|￥)\s*([0-9,]+)",
+        r"([0-9]{1,3}(?:,[0-9]{3})+)円",
+        r"(?:^|\s)([0-9]{3,7})円",
+    ]
+    for pattern in patterns:
+        for value in re.findall(pattern, text):
             try:
                 v = int(value.replace(",", ""))
                 if MIN_PRICE <= v <= MAX_PRICE:
                     values.append(v)
             except ValueError:
                 pass
+    return values
+
+
+def structured_jpy_prices(text):
+    """Extract JPY prices from embedded JSON/JSON-LD without treating USD as JPY."""
+    values = []
+    if not text:
+        return values
+    for match in re.finditer(r'"priceCurrency"\s*:\s*"JPY".{0,300}?"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', text, re.S):
+        try:
+            v = int(float(match.group(1)))
+            if MIN_PRICE <= v <= MAX_PRICE:
+                values.append(v)
+        except ValueError:
+            pass
     return values
 
 
@@ -62,6 +81,12 @@ def looks_like_auction(text):
     return any(term in t for term in auction_terms)
 
 
+def looks_sold(text):
+    t = normalize(text).lower()
+    sold_terms = ["売り切れ", "sold out", "soldout", "取引完了"]
+    return any(term in t for term in sold_terms)
+
+
 def collect_dom_items(page):
     return page.locator('a[href*="/item/"]').evaluate_all(
         """els => els.map(a => ({
@@ -69,6 +94,24 @@ def collect_dom_items(page):
             text: (a.closest('li') || a.closest('[role="article"]') || a.parentElement || a).innerText || ''
         }))"""
     )
+
+
+def detail_jpy_price(page, href):
+    """Open an item detail page and prefer structured JPY price data."""
+    try:
+        page.goto(href, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
+        page.wait_for_timeout(800)
+        scripts = page.locator('script').all_inner_texts()
+        for script in scripts:
+            values = structured_jpy_prices(script)
+            if values:
+                return values[0]
+        body = normalize(page.locator("body").inner_text())
+        values = money_values(body)
+        return values[0] if values else None
+    except Exception as exc:
+        print("detail price error:", repr(exc))
+        return None
 
 
 def browser_lookup(page, query, debug=False):
@@ -100,7 +143,7 @@ def browser_lookup(page, query, debug=False):
         if not href or href in seen:
             continue
         text = normalize(raw.get("text", ""))
-        if not text or looks_like_auction(text):
+        if not text or looks_like_auction(text) or not looks_sold(text):
             continue
         seen.add(href)
         prices = money_values(text)
@@ -111,26 +154,33 @@ def browser_lookup(page, query, debug=False):
                     prices = money_values(anchor_text)
             except Exception:
                 pass
+        if not prices:
+            price = detail_jpy_price(page, href)
+            if price:
+                prices = [price]
         if prices:
-            rows.append({"url": href, "title": text[:500], "price": prices[0], "auction": False})
+            rows.append({"url": href, "title": text[:500], "price": prices[0], "auction": False, "sold": True})
         if len(rows) >= 20:
             break
 
     prices = sorted(x["price"] for x in rows)
     if not prices:
-        return {"query": query, "url": url, "count": 0, "prices": [], "items": [], "anchor_count": anchor_count, "auction_excluded": True}
+        return {
+            "query": query, "url": url, "count": 0, "prices": [], "items": [],
+            "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True,
+        }
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
     return {
         "query": query, "url": url, "count": len(prices), "prices": prices,
         "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
         "low": min(prices), "high": max(prices), "items": rows[:10],
-        "anchor_count": anchor_count, "auction_excluded": True,
+        "anchor_count": anchor_count, "auction_excluded": True, "sold_only_enforced": True,
     }
 
 
 def fallback_sold_keyword_lookup(page, query):
     all_rows = []
-    for extra in ["売約済み", "sold out"]:
+    for extra in ["売り切れ", "sold out"]:
         q = f"{query} {extra}"
         url = "https://jp.mercari.com/search?" + urllib.parse.urlencode({"keyword": q})
         try:
@@ -139,28 +189,25 @@ def fallback_sold_keyword_lookup(page, query):
             raw_items = collect_dom_items(page)
             for raw in raw_items[:80]:
                 text = normalize(raw.get("text", ""))
-                if not text or looks_like_auction(text):
-                    continue
-                lowered = text.lower()
-                if "売約済み" not in text and "sold out" not in lowered and "soldout" not in lowered:
+                if not text or looks_like_auction(text) or not looks_sold(text):
                     continue
                 prices = money_values(text)
                 if prices:
-                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0], "auction": False})
+                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0], "auction": False, "sold": True})
         except Exception as exc:
             print("fallback error:", repr(exc))
             continue
-    unique = {row["url"]: row for row in all_rows}
+    unique = {row["url"]: row for row in all_rows if row.get("url")}
     rows = list(unique.values())[:20]
     prices = sorted(x["price"] for x in rows)
     if not prices:
-        return {"count": 0, "prices": [], "items": [], "fallback": True, "auction_excluded": True}
+        return {"count": 0, "prices": [], "items": [], "fallback": True, "auction_excluded": True, "sold_only_enforced": True}
     trimmed = prices[1:-1] if len(prices) >= 5 else prices
     return {
         "count": len(prices), "prices": prices,
         "median": int(statistics.median(prices)), "robust_median": int(statistics.median(trimmed)),
         "low": min(prices), "high": max(prices), "items": rows[:10],
-        "fallback": True, "auction_excluded": True,
+        "fallback": True, "auction_excluded": True, "sold_only_enforced": True,
     }
 
 
@@ -175,7 +222,15 @@ def main():
     checked = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page(locale="ja-JP", viewport={"width": 1440, "height": 1000})
+        context = browser.new_context(
+            locale="ja-JP",
+            timezone_id="Asia/Tokyo",
+            geolocation={"latitude": 35.6895, "longitude": 139.6917},
+            permissions=["geolocation"],
+            extra_http_headers={"Accept-Language": "ja-JP,ja;q=0.9,en;q=0.8"},
+            viewport={"width": 1440, "height": 1000},
+        )
+        page = context.new_page()
         for index, item in enumerate(candidates[:MAX_CHECKS]):
             title = normalize(item.get("title", ""))
             if not title:
@@ -205,12 +260,13 @@ def main():
             checked.append(result)
             print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False))
             time.sleep(0.5)
+        context.close()
         browser.close()
 
     OUTPUT.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "checked": checked,
-        "note": "まず1件で疎通確認。オークション・入札系表示は相場計算から除外し、0件時は売約済み/sold out検索をフォールバック。成功後に監視件数を増やす。",
+        "note": "売り切れバッジをDOM上で確認してsold-onlyを強制。オークション・入札系表示を除外。価格は日本円表示または商品詳細のJPY構造化データを優先し、USDを円として誤認しない。まず1件で疎通確認。",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
