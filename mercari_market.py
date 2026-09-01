@@ -5,6 +5,7 @@ import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
+from playwright.sync_api import sync_playwright
 
 INPUT = Path("resell_candidates.json")
 OUTPUT = Path("mercari_market.json")
@@ -115,10 +116,8 @@ def detail_jpy_price(page,href):
         page.wait_for_timeout(1500)
         body=normalize(page.locator("body").inner_text()); html=page.locator("html").inner_html()
         if looks_like_auction(body): return None
+        sold=looks_sold(body)
 
-        # Mercari can keep the transaction price in JSON/React state even when
-        # the visible page text contains no yen symbol. Check all script blobs,
-        # HTML, then price-specific DOM/meta elements.
         blobs=page.locator("script").all_inner_texts()+[html]
         for blob in blobs:
             values=structured_jpy_prices(blob)
