@@ -37,14 +37,6 @@ jobs:
         if: success()
         run: python enrich_jmty.py
 
-      - name: Prepare Mercari market checker
-        if: success()
-        run: python patch_mercari_region.py
-
-      - name: Enable Mercari API JPY sold-price extraction
-        if: success()
-        run: python patch_mercari_api.py
-
       - name: Check Mercari sold-market prices
         if: success()
         run: python mercari_market.py
