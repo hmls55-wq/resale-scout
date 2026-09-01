@@ -50,9 +50,17 @@ def score_similarity(source_title, candidate_title):
     return min(100, int(overlap * 75 + min(model_hits, 5) * 5))
 
 
+def looks_like_auction(text):
+    t = normalize(text).lower()
+    # Auction listings must never be treated as fixed-price sold comps.
+    auction_terms = [
+        "オークション", "入札", "入札件数", "入札履歴", "開始価格",
+        "現在価格", "最高額", "落札", "auction", "bid", "bids"
+    ]
+    return any(term in t for term in auction_terms)
+
+
 def collect_dom_items(page):
-    # Do not depend on a specific React/Next.js card class. Collect every item link
-    # and use its nearest list/container text for price extraction.
     return page.locator('a[href*="/item/"]').evaluate_all(
         """els => els.map(a => ({
             href: a.href,
@@ -90,15 +98,15 @@ def browser_lookup(page, query, debug=False):
         if not href or href in seen:
             continue
         text = normalize(raw.get("text", ""))
-        if not text:
+        if not text or looks_like_auction(text):
             continue
         seen.add(href)
         prices = money_values(text)
         if not prices:
-            # Fall back to the anchor's own text if the nearest container is unusual.
             try:
                 anchor_text = normalize(page.locator(f'a[href="{href}"]').first.inner_text())
-                prices = money_values(anchor_text)
+                if not looks_like_auction(anchor_text):
+                    prices = money_values(anchor_text)
             except Exception:
                 pass
         if prices:
@@ -106,6 +114,7 @@ def browser_lookup(page, query, debug=False):
                 "url": href,
                 "title": text[:500],
                 "price": prices[0],
+                "auction": False,
             })
         if len(rows) >= 20:
             break
@@ -125,12 +134,11 @@ def browser_lookup(page, query, debug=False):
         "high": max(prices),
         "items": rows[:10],
         "anchor_count": anchor_count,
+        "auction_excluded": True,
     }
 
 
 def fallback_sold_keyword_lookup(page, query):
-    # If the dedicated sold/trading filter renders no cards, try the public search
-    # index with explicit sold-language terms. These are fallback signals only.
     all_rows = []
     for extra in ["売約済み", "sold out"]:
         q = f"{query} {extra}"
@@ -141,19 +149,17 @@ def fallback_sold_keyword_lookup(page, query):
             raw_items = collect_dom_items(page)
             for raw in raw_items[:80]:
                 text = normalize(raw.get("text", ""))
-                if not text:
+                if not text or looks_like_auction(text):
                     continue
                 lowered = text.lower()
                 if "売約済み" not in text and "sold out" not in lowered and "soldout" not in lowered:
                     continue
                 prices = money_values(text)
                 if prices:
-                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0]})
+                    all_rows.append({"url": raw.get("href", ""), "title": text[:500], "price": prices[0], "auction": False})
         except Exception:
             continue
-    unique = {}
-    for row in all_rows:
-        unique[row["url"]] = row
+    unique = {row["url"]: row for row in all_rows}
     rows = list(unique.values())[:20]
     prices = sorted(x["price"] for x in rows)
     if not prices:
@@ -168,6 +174,7 @@ def fallback_sold_keyword_lookup(page, query):
         "high": max(prices),
         "items": rows[:10],
         "fallback": True,
+        "auction_excluded": True,
     }
 
 
@@ -208,14 +215,14 @@ def main():
             result["source_title"] = title
             result["purchase_price"] = item.get("price", 0)
             checked.append(result)
-            print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False))
+            print("メルカリ相場", title, "件数=", result.get("count", 0), "中央値=", result.get("robust_median"), "一致度=", best_similarity, "fallback=", result.get("fallback_used", False), "auction_excluded=", result.get("auction_excluded", True))
             time.sleep(1)
         browser.close()
 
     OUTPUT.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "checked": checked,
-        "note": "ブラウザでメルカリの売り切れ/取引中検索を確認し、0件時は売約済み/sold outキーワード検索をフォールバック。画像一致は未実装。",
+        "note": "ブラウザでメルカリの売り切れ/取引中検索を確認。オークション・入札系表示は実売相場から除外し、0件時は売約済み/sold outキーワード検索をフォールバック。画像一致は未実装。",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
