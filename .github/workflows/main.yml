@@ -37,6 +37,10 @@ jobs:
         if: success()
         run: python enrich_jmty.py
 
+      - name: Normalize market query titles
+        if: success()
+        run: python prepare_market_candidates.py
+
       - name: Check Mercari sold-market prices
         if: success()
         run: python mercari_market.py
