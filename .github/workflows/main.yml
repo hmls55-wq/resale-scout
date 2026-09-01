@@ -49,6 +49,10 @@ jobs:
         if: success()
         run: python calculate_profit.py
 
+      - name: Rank resale opportunities
+        if: success()
+        run: python rank_opportunities.py
+
       - name: Build Mercari verification report
         if: always()
         run: python build_verification_report.py
@@ -57,7 +61,7 @@ jobs:
         if: always()
         run: |
           echo "=== generated files ==="
-          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json profit_report.md profit_candidates.json mercari_debug.* 2>/dev/null || true
+          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json profit_report.md profit_candidates.json opportunity_report.md opportunity_candidates.json mercari_debug.* 2>/dev/null || true
 
       - name: Upload scout report
         if: always()
@@ -71,6 +75,8 @@ jobs:
             mercari_market.json
             profit_report.md
             profit_candidates.json
+            opportunity_report.md
+            opportunity_candidates.json
             mercari_debug.txt
             mercari_debug.png
           if-no-files-found: warn
