@@ -45,6 +45,10 @@ jobs:
         if: success()
         run: python mercari_market.py
 
+      - name: Improve Mercari title matching
+        if: success()
+        run: python improve_market_similarity.py
+
       - name: Calculate net resale profit
         if: success()
         run: python calculate_profit.py
