@@ -33,6 +33,10 @@ jobs:
       - name: Run Resell Scout
         run: python scout.py
 
+      - name: Scan additional resale categories
+        if: success()
+        run: python scout_extra.py
+
       - name: Enrich Jimoty candidates
         if: success()
         run: python enrich_jmty.py
