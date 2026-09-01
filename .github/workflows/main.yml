@@ -41,7 +41,7 @@ jobs:
         if: always()
         run: |
           echo "=== generated files ==="
-          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json
+          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json mercari_debug.* 2>/dev/null || true
 
       - name: Upload scout report
         if: always()
@@ -53,5 +53,7 @@ jobs:
             resell_candidates.json
             verification_report.md
             mercari_market.json
-          if-no-files-found: error
+            mercari_debug.txt
+            mercari_debug.png
+          if-no-files-found: warn
           retention-days: 7
