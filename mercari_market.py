@@ -70,10 +70,19 @@ def ensure_japan_region(page):
     body=normalize(page.locator("body").inner_text())
     if "別の地域の商品を閲覧しています" not in body:return False
     try:
-        result = page.locator('select[aria-label="国/地域を選択"]').evaluate("""el => { el.value='jp'; el.dispatchEvent(new Event('change',{bubbles:true})); return el.value; }""")
-        if result == "jp":
-            page.wait_for_timeout(300)
-            return True
+        selects = page.locator('select')
+        for i in range(selects.count()):
+            sel = selects.nth(i)
+            try:
+                options = sel.locator('option[value="jp"]')
+                if options.count() == 0:
+                    continue
+                result = sel.evaluate("""el => { el.value='jp'; el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return el.value; }""")
+                if result == "jp":
+                    page.wait_for_timeout(300)
+                    return True
+            except Exception:
+                continue
     except Exception as exc:
         print("region select error:",repr(exc))
     return False
