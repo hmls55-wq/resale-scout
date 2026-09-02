@@ -14,6 +14,7 @@ jobs:
       - name: Live new-item test
         env:
           JIMOTY_SEARCH_TERM: "IKEA"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           set -e
           rm -f jimoty_live_snapshot.json
@@ -22,18 +23,33 @@ jobs:
             echo "===== LIVE CHECK $i/6 ====="
             sleep 290
             python jimoty_live_new_test.py
-            if grep -q '"new_items": \[' jimoty_live_snapshot.json; then
-              COUNT=$(python - <<'PY'
+            COUNT=$(python - <<'PY'
           import json
           with open('jimoty_live_snapshot.json', encoding='utf-8') as f:
               print(len(json.load(f).get('new_items', [])))
           PY
-              )
-              if [ "$COUNT" -gt 0 ]; then
-                echo "LIVE NEW ITEM DETECTED: $COUNT"
-                exit 0
-              fi
+            )
+            if [ "$COUNT" -gt 0 ]; then
+              echo "LIVE NEW ITEM DETECTED: $COUNT"
+              python - <<'PY'
+          import json, os, urllib.request
+          with open('jimoty_live_snapshot.json', encoding='utf-8') as f:
+              data = json.load(f)
+          webhook = os.environ['DISCORD_WEBHOOK_URL']
+          embeds = []
+          for item in data.get('new_items', [])[:5]:
+              embeds.append({
+                  'title': item['title'],
+                  'url': item['url'],
+                  'description': '検索：IKEA\n掲載：ライブ監視で新規検出',
+              })
+          payload = {'content': '🚨 LIVE新着検知テスト成功', 'embeds': embeds}
+          req = urllib.request.Request(webhook, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'), headers={'Content-Type':'application/json'}, method='POST')
+          with urllib.request.urlopen(req, timeout=15) as r:
+              print('Discord HTTP', r.status)
+          PY
+              exit 0
             fi
           done
-          echo "No new IKEA listing appeared during the live test window."
+          echo "No new IKEA listing appeared during the 30-minute live test window."
           exit 0
