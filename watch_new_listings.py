@@ -10,7 +10,7 @@ import scout
 WATCHLIST_PATH = Path("watchlist.json")
 STATE_PATH = Path("watch_state.json")
 MAX_NEW_ITEMS = 20
-WEEK_PAGES = 7
+WEEK_PAGES = 30
 
 
 def load_json(path, default):
@@ -76,7 +76,7 @@ def discord_notify(items):
         embed = {
             "title": f"{priority} {item.get('title', 'ジモティー商品')[:240]}",
             "url": item.get("url"),
-            "description": f"監視一致：{hits}\n価格：{item.get('price', 0):,}円\n\n直近1週間スキャン",
+            "description": f"監視一致：{hits}\n価格：{item.get('price', 0):,}円\n\n直近30日スキャン（30ページ）",
             "footer": {"text": "Resell Scout"},
         }
         if image:
@@ -107,8 +107,7 @@ def main():
     week_scan = os.environ.get("WEEK_SCAN", "true").strip().lower() == "true"
     all_items = []
 
-    # Jimoty's category pages are paginated. Scan several pages so the manual
-    # review covers a broad recent inventory rather than only the first page.
+    # Scan a broader 30-page window as a practical proxy for the recent inventory.
     for base_url in scout.SEARCH_URLS:
         for page in range(1, WEEK_PAGES + 1):
             url = base_url if page == 1 else f"{base_url}?page={page}"
@@ -137,9 +136,9 @@ def main():
         save_state(seen)
 
     matches.sort(key=lambda x: (0 if any(h.get("priority") == "最優先" for h in x.get("watch_hits", [])) else 1, x.get("price", 0)))
-    Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": "WEEK-SCAN" if week_scan else "NEW-ONLY", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": "30-DAY-PAGE-SCAN" if week_scan else "NEW-ONLY", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    mode = "WEEK-SCAN" if week_scan else "NEW-ONLY"
+    mode = "30-DAY-PAGE-SCAN" if week_scan else "NEW-ONLY"
     print(f"Mode: {mode}")
     print(f"Observed: {len(unique)} / Watched matches: {len(matches)}")
     for item in matches[:MAX_NEW_ITEMS]:
