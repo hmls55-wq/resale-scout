@@ -35,6 +35,9 @@ jobs:
           fi
           test -f watch_state.json || echo '{"seen_urls":[]}' > watch_state.json
 
+      - name: Isolate item titles before matching
+        run: python patch_watchlist_match.py
+
       - name: Run new-listing watcher
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
