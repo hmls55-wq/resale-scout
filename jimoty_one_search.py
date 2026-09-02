@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 SEARCH_TERM = os.environ.get("JIMOTY_SEARCH_TERM", "IKEA")
 STATE_PATH = Path("jimoty_one_search_state.json")
-MAX_NEW_ITEMS = 20
+MAX_NEW_ITEMS = 5
 DISCORD_RETRIES = 4
 JST = ZoneInfo("Asia/Tokyo")
 BASE_URL = "https://jmty.jp/aichi/sale-fur-kw-"
@@ -51,20 +51,14 @@ def extract_price(text):
 
 
 def extract_items(html):
-    # ジモティーは商品カードのリンクと「作成日時」のHTML上の距離が
-    # 一定ではないため、リンク単位で固定文字数を切り出す方式は使わない。
-    # まず商品リンクと作成日時をそれぞれ全件抽出し、近い日時を商品へ関連付ける。
+    # 検索結果はジモティー側の並び順（通常は新着順）をそのまま使う。
+    # 日付のHTML表記を解析せず、商品リンク単位でカード情報を取得する。
     matches = list(re.finditer(
         r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>',
         html, re.I | re.S
     ))
-    date_matches = list(re.finditer(
-        r"作成\s*([0-9０-９]{1,2})月\s*([0-9０-９]{1,2})日",
-        html
-    ))
 
     seen = set()
-    used_dates = set()
     items = []
     for m in matches:
         href = m.group(1)
@@ -74,26 +68,9 @@ def extract_items(html):
             continue
         seen.add(url)
 
-        # 商品リンクの前後15,000文字以内にある「作成日」のうち、最も近いものを採用。
-        candidates = []
-        for d in date_matches:
-            if d.start() in used_dates:
-                continue
-            distance = abs(d.start() - m.start())
-            if distance <= 15000:
-                candidates.append((distance, d))
-        candidates.sort(key=lambda x: x[0])
-        date_match = candidates[0][1] if candidates else None
-        if date_match:
-            used_dates.add(date_match.start())
-
-        # 価格・タイトル用には商品リンク周辺を広めに見る。
         start = max(0, m.start() - 3000)
         end = min(len(html), m.start() + 15000)
-        block = html[start:end]
-        text = clean(block)
-        if date_match:
-            text += " 作成" + date_match.group(1) + "月" + date_match.group(2) + "日"
+        text = clean(html[start:end])
 
         title = clean(m.group(2))
         title = re.sub(r"お気に入り.*$", "", title).strip()
@@ -102,13 +79,9 @@ def extract_items(html):
             continue
 
         items.append({"title": title[:200], "price": price, "url": url, "text": text})
-        if len(items) >= 100:
+        if len(items) >= 50:
             break
     return items
-
-
-def today_created(text, now):
-    return re.search(rf"作成\s*{now.month}月\s*{now.day}日", text) is not None
 
 
 def load_state():
@@ -116,11 +89,15 @@ def load_state():
         data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except Exception:
         data = {}
-    return set(data.get("notified_urls", []))
+    return set(data.get("notified_urls", [])), bool(data.get("initialized"))
 
 
-def save_state(urls):
-    STATE_PATH.write_text(json.dumps({"updated_at": datetime.now(JST).isoformat(), "notified_urls": list(urls)[-5000:]}, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_state(urls, initialized=True):
+    STATE_PATH.write_text(json.dumps({
+        "updated_at": datetime.now(JST).isoformat(),
+        "initialized": initialized,
+        "notified_urls": list(urls)[-5000:]
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def post_discord(webhook, payload):
@@ -154,13 +131,13 @@ def discord_notify(items):
             "embeds": [{
                 "title": item["title"],
                 "url": item["url"],
-                "description": f"検索：{SEARCH_TERM}\n価格：{item['price']:,}円\n掲載：本日\n\nジモティーの検索結果から検出",
+                "description": f"検索：{SEARCH_TERM}\n価格：{item['price']:,}円\n掲載：検索結果の新着\n\nジモティーの検索結果から検出",
                 "footer": {"text": "Resell Scout / Jimoty one-search test"},
             }],
         })
 
 
-def discord_diagnostic(parsed, today, new_items):
+def discord_diagnostic(parsed, latest, new_items, initialized):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook:
         raise RuntimeError("DISCORD_WEBHOOK_URL secret が設定されていません")
@@ -168,7 +145,7 @@ def discord_diagnostic(parsed, today, new_items):
         "content": "🧪 ジモティー監視テスト接続OK",
         "embeds": [{
             "title": f"{SEARCH_TERM}検索の診断結果",
-            "description": f"検索ページ取得：OK\n取得商品数：{parsed}件\n今日判定：{today}件\nDiscord通知対象：{new_items}件\n\nこのメッセージが届けばDiscord接続は正常です。",
+            "description": f"検索ページ取得：OK\n取得商品数：{parsed}件\n今回見る最新：{latest}件\nDiscord通知対象：{new_items}件\n状態初期化済み：{'はい' if initialized else 'いいえ'}\n\n次回から新しく出てきた商品だけ通知します。",
             "footer": {"text": "Resell Scout / Jimoty one-search diagnostic"},
         }],
     })
@@ -182,36 +159,40 @@ def main():
     print(f"URL: {url}")
     html = fetch(url)
     items = extract_items(html)
-    today_items = [x for x in items if today_created(x["text"], now)]
-    print(f"Parsed: {len(items)}, today: {len(today_items)}")
+    latest_items = items[:MAX_NEW_ITEMS]
+    print(f"Parsed: {len(items)}, latest: {len(latest_items)}")
 
-    if items:
-        created_hits = sum(1 for x in items if "作成" in x["text"])
-        print(f"Items containing 作成: {created_hits}")
-        samples = [re.search(r"作成\s*[0-9０-９]{1,2}月\s*[0-9０-９]{1,2}日", x["text"]).group(0) for x in items if re.search(r"作成\s*[0-9０-９]{1,2}月\s*[0-9０-９]{1,2}日", x["text"])]
-        print(f"作成日時サンプル: {samples[:10]}")
+    state, initialized = load_state()
+    current_urls = {x["url"] for x in items}
 
-    state = load_state()
-    new_items = [x for x in today_items if x["url"] not in state]
-    print(f"New to Discord: {len(new_items)}")
+    # 初回だけ現在の一覧を既読として登録し、過去掲載品を一気に通知しない。
+    if not initialized:
+        state.update(current_urls)
+        save_state(state, initialized=True)
+        new_items = []
+        print(f"State initialized with {len(current_urls)} URLs; no old items notified.")
+    else:
+        # 最新50件の中から未通知だけを抽出し、その中でも新しい順に最大5件通知。
+        new_items = [x for x in items if x["url"] not in state][:MAX_NEW_ITEMS]
+        print(f"New in latest 50: {len(new_items)}")
+        if new_items:
+            discord_notify(new_items)
+            state.update(x["url"] for x in new_items)
+        # 現在の最新50件も既知として記録して、古い掲載が後から通知されないようにする。
+        state.update(current_urls)
+        save_state(state, initialized=True)
 
     if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
-        discord_diagnostic(len(items), len(today_items), len(new_items))
+        discord_diagnostic(len(items), len(latest_items), len(new_items), True)
 
-    if new_items:
-        discord_notify(new_items)
-        state.update(x["url"] for x in new_items)
-        save_state(state)
-    else:
-        save_state(state)
-        print("No new items; Discord notification skipped.")
+    print("No new items; Discord notification skipped." if not new_items else f"Discord notified: {len(new_items)}")
 
     Path("jimoty_one_search_result.json").write_text(json.dumps({
         "checked_at": now.isoformat(),
         "search_term": SEARCH_TERM,
         "search_url": url,
         "parsed_items": len(items),
-        "today_items": len(today_items),
+        "latest_items": len(latest_items),
         "new_items": len(new_items),
         "items": new_items[:MAX_NEW_ITEMS],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
