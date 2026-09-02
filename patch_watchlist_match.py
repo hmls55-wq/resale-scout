@@ -134,10 +134,12 @@ def probe_keyword_pages(entries):
                 pos = html.find(href)
                 if pos < 0:
                     continue
-                block = html[max(0, pos - 1200):min(len(html), pos + 10000)]
-                card_text = re.sub(r"<[^>]+>", " ", block)
-                card_text = re.sub(r"\\s+", " ", card_text).strip()
-                if STATUS_RE.search(card_text):
+                # Jimoty places the status label just before the listing title.
+                # Keep this window tight so a neighboring card cannot poison the result.
+                status_block = html[max(0, pos - 1600):min(len(html), pos + 900)]
+                status_text = re.sub(r"<[^>]+>", " ", status_block)
+                status_text = re.sub(r"\s+", " ", status_text).strip()
+                if STATUS_RE.search(status_text):
                     print(f"  KEYWORD ENDED SKIP: {anchor.get('title') or anchor.get('text','')[:100]}")
                     continue
                 title = anchor.get("title") or anchor.get("heading") or anchor.get("title_attr") or anchor.get("text") or ""
@@ -146,7 +148,7 @@ def probe_keyword_pages(entries):
                 hits = match_watchlist({"title": title}, entries)
                 if not hits:
                     continue
-                m = re.search(r"(\\d{1,2})月(\\d{1,2})日", card_text)
+                m = re.search(r"(\d{1,2})月(\d{1,2})日", status_text)
                 if not m:
                     continue
                 try:
@@ -157,7 +159,7 @@ def probe_keyword_pages(entries):
                     md = datetime.strptime(f"{today.year-1}-{int(m.group(1)):02d}-{int(m.group(2)):02d}", "%Y-%m-%d").date()
                 if md < cutoff:
                     continue
-                price = scout.extract_price(card_text)
+                price = scout.extract_price(status_text)
                 if price is None:
                     continue
                 image_urls = []
@@ -170,8 +172,8 @@ def probe_keyword_pages(entries):
                         image_urls.append(src)
                 item = {
                     "title": title[:240], "price": price, "url": item_url.split("#", 1)[0],
-                    "text": card_text, "image_urls": image_urls[:5], "watch_hits": hits,
-                    "location": detect_location(card_text), "distance_km": 100, "keyword_probe": term,
+                    "text": status_text, "image_urls": image_urls[:5], "watch_hits": hits,
+                    "location": detect_location(status_text), "distance_km": 100, "keyword_probe": term,
                 }
                 out.append(item)
                 print(f"  KEYWORD RECENT MATCH: {title[:120]} / {price:,}円 / {item_url}")
