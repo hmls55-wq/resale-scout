@@ -112,15 +112,13 @@ if old4 not in sc:
 sc = sc.replace(old4, new4, 1)
 scout_path.write_text(sc, encoding="utf-8")
 
-# Temporary keyword-source probe. Keyword result pages contain historical
-# results, so only accept listings whose displayed date is within 7 days.
 if 'def probe_keyword_pages(entries):' not in s:
     probe = r'''
 
 def probe_keyword_pages(entries):
     probe_terms = ["カールハンセン", "パントンチェア"]
-    today = datetime.date.today()
-    cutoff = today - datetime.timedelta(days=7)
+    today = datetime.now().date()
+    cutoff = today - __import__("datetime").timedelta(days=7)
     out = []
     for term in probe_terms:
         slug = urllib.parse.quote(term, safe="")
@@ -139,11 +137,10 @@ def probe_keyword_pages(entries):
                     continue
                 m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
                 if not m:
-                    print("  SKIP keyword match without date:", title[:100])
                     continue
-                md = datetime.date(today.year, int(m.group(1)), int(m.group(2)))
+                md = datetime.strptime(f"{today.year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}", "%Y-%m-%d").date()
                 if md > today:
-                    md = datetime.date(today.year - 1, int(m.group(1)), int(m.group(2)))
+                    md = datetime.strptime(f"{today.year-1}-{int(m.group(1)):02d}-{int(m.group(2)):02d}", "%Y-%m-%d").date()
                 if md < cutoff:
                     continue
                 item["watch_hits"] = hits
