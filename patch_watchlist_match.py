@@ -3,7 +3,7 @@ from pathlib import Path
 watch_path = Path("watch_new_listings.py")
 s = watch_path.read_text(encoding="utf-8")
 
-# 1) Match only the listing title.
+# Match only the listing title.
 old = '''def match_watchlist(item, entries):
     original_text = " ".join([item.get("title", ""), item.get("text", "")])
     compact_text = norm(original_text)
@@ -18,20 +18,22 @@ new = '''def match_watchlist(item, entries):
 if old in s:
     s = s.replace(old, new, 1)
 
-# 2) Status only from the listing title.
+# Status only from the listing title.
 old2 = '''        text = " ".join([item.get("title", ""), item.get("text", "")])
         if STATUS_RE.search(text):
 '''
-new2 = '''        # Status must also be checked against the listing title only.
-        text = str(item.get("title", ""))
+new2 = '''        text = str(item.get("title", ""))
         if STATUS_RE.search(text):
 '''
 if old2 in s:
     s = s.replace(old2, new2, 1)
 
-# 3) Prefer the actual heading inside a Jimoty article card as its title.
+# Keep the runtime keyword probe enabled while validating source coverage.
 scout_path = Path("scout.py")
 sc = scout_path.read_text(encoding="utf-8")
+
+# Article anchors can wrap the whole card. Capture heading text as the actual
+# title, while preserving anchor text for card-local status/location/price.
 old3 = '''class JmtyAnchorParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True); self.items = []; self.current = None; self.in_anchor = False; self.anchor_depth = 0
@@ -97,19 +99,30 @@ if old3 in sc:
 old4 = '''        title = anchor["text"] or normalize(anchor["title_attr"])
 '''
 new4 = '''        title = anchor.get("title") or anchor.get("heading") or normalize(anchor["title_attr"]) or anchor["text"]
+        card_text = anchor.get("text") or title
 '''
 if old4 in sc:
     sc = sc.replace(old4, new4, 1)
+# Make status and price card-local instead of using the +/-3000-character
+# neighborhood, which can contain another listing's status/price.
+old5 = '''        if re.search(r"受付終了|掲載終了|募集終了|取引終了", clean): continue
+        price = extract_price(clean)
+'''
+new5 = '''        if re.search(r"受付終了|掲載終了|募集終了|取引終了|終了しました|終了済み", card_text): continue
+        price = extract_price(card_text)
+        if price is None:
+            price = extract_price(clean)
+'''
+if old5 in sc:
+    sc = sc.replace(old5, new5, 1)
 scout_path.write_text(sc, encoding="utf-8")
 
-# 4) Temporary source-coverage probe: Jimoty's normal keyword result pages are
-# visibly different from the radius portal. Probe the two listings we already
-# know should be discoverable, using the same 100km parameter, and feed any
-# genuine title matches into the normal notification pipeline.
-probe = r'''
+# Temporary source-coverage probe for the known missed listings.
+if 'def probe_keyword_pages(entries):' not in s:
+    probe = r'''
 
 def probe_keyword_pages(entries):
-    probe_terms = ["CarlHansen", "Panton Chair", "パントンチェア"]
+    probe_terms = ["カールハンセン", "CarlHansen", "Panton Chair", "パントンチェア"]
     out = []
     for term in probe_terms:
         slug = urllib.parse.quote(term, safe="")
@@ -136,20 +149,10 @@ def probe_keyword_pages(entries):
             print("Keyword probe failed:", repr(e))
     return out
 '''
-marker = '\ndef main():\n'
-if 'def probe_keyword_pages(entries):' not in s:
+    marker = '\ndef main():\n'
     if marker not in s:
         raise SystemExit("main marker not found")
     s = s.replace(marker, probe + marker, 1)
-old5 = '''            all_items.extend(parsed)
-            all_items.extend(rescued)
-        except Exception as e:
-'''
-new5 = '''            all_items.extend(parsed)
-            all_items.extend(rescued)
-        except Exception as e:
-'''
-# Keep the existing page loop unchanged; inject the probe after the loop.
 needle = '''            print("Fetch failed:", repr(e))
 
     unique = {item["url"]: item for item in all_items}
@@ -159,8 +162,7 @@ replacement = '''            print("Fetch failed:", repr(e))
     all_items.extend(probe_keyword_pages(entries))
     unique = {item["url"]: item for item in all_items}
 '''
-if needle not in s:
-    raise SystemExit("post-loop injection target not found")
-s = s.replace(needle, replacement, 1)
+if needle in s:
+    s = s.replace(needle, replacement, 1)
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: title-only matching + keyword source probe enabled")
+print("Patched watcher: title-only matching, card-local status/price, keyword probe")
