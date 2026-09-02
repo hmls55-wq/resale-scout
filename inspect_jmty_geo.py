@@ -1,15 +1,14 @@
 import re, urllib.request
-from html import unescape
-url='https://jmty.jp/s/area_portal/1005342?distance=50'
-req=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'})
-with urllib.request.urlopen(req,timeout=30) as r: html=r.read().decode('utf-8','replace')
-print('TITLE',re.search(r'<title>(.*?)</title>',html,re.S).group(1).strip())
-forms=re.findall(r'<form[^>]+action=[\"\']([^\"\']*area_portal/search[^\"\']*)[\"\'][^>]*>(.*?)</form>',html,re.S|re.I)
-print('CATEGORY_FORMS',len(forms))
-for action,body in forms:
-    print('ACTION',action)
-    for tag in re.findall(r'<input[^>]+>',body,re.I):
-        n=re.search(r'name=[\"\']([^\"\']+)',tag,re.I); v=re.search(r'value=[\"\']([^\"\']*)',tag,re.I); t=re.search(r'type=[\"\']([^\"\']+)',tag,re.I)
-        if n: print('INPUT',n.group(1),'VALUE',v.group(1) if v else '','TYPE',t.group(1) if t else '')
-    for tag in re.findall(r'<button[^>]*>|<select[^>]*>',body,re.I): print('CONTROL',unescape(tag))
-    print('BODY_SNIPPET',unescape(re.sub(r'\s+',' ',body))[:5000])
+BASE='https://jmty.jp/s/area_portal/1005342?distance=50'
+URLS=[BASE,BASE+'&category_group=1',BASE+'&category_id=6',BASE+'&category_group_ids[]=1&category_ids[]=6',BASE+'&category_group_id=1&category_id=6']
+UA='Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+for url in URLS:
+    req=urllib.request.Request(url,headers={'User-Agent':UA})
+    with urllib.request.urlopen(req,timeout=30) as r: html=r.read().decode('utf-8','replace')
+    title=re.search(r'<title>(.*?)</title>',html,re.S|re.I).group(1).strip()
+    count=re.search(r'全([0-9,]+)件中',html)
+    arts=list(dict.fromkeys(re.findall(r'/[a-z]+/sale-fur/article-[a-z0-9]+',html)))
+    print('URL',url)
+    print('TITLE',title)
+    print('COUNT',count.group(1) if count else '?','FURNITURE_ARTICLES',len(arts))
+    print('SAMPLE',arts[:5])
