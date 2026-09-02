@@ -16,8 +16,8 @@ MAX_NEW_ITEMS = 20
 SCAN_PAGES = int(os.environ.get("SCAN_PAGES", "5"))
 DISCORD_RETRIES = 4
 DISCORD_MIN_INTERVAL = 1.25
-AREA_PORTAL_BASE = "https://jmty.jp/s/area_portal/1005342?distance=50"
-AREA_LABEL = "名古屋市中村区・50km圏内"
+AREA_PORTAL_BASE = "https://jmty.jp/s/area_portal/1005342?distance=100"
+AREA_LABEL = "名古屋市中村区・100km圏内"
 AREA_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 STATUS_RE = re.compile(r"受付終了|掲載終了|募集終了|取引終了|終了しました|終了済み")
 
@@ -267,7 +267,7 @@ def main():
             continue
         item["watch_hits"] = hits
         item["location"] = detect_location(text)
-        item["distance_km"] = 50
+        item["distance_km"] = 100
         if url not in state["notified_match_urls"]:
             matches.append(item)
 
@@ -276,11 +276,11 @@ def main():
     save_state(state)
 
     matches.sort(key=lambda x: (0 if any(h.get("priority") == "最優先" for h in x.get("watch_hits", [])) else 1, x.get("price", 0)))
-    Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": f"AREA-PORTAL-50KM-ALL-P{SCAN_PAGES}", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Mode: AREA-PORTAL-50KM-ALL-P{SCAN_PAGES}")
+    Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": f"AREA-PORTAL-100KM-ALL-P{SCAN_PAGES}", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Mode: AREA-PORTAL-100KM-ALL-P{SCAN_PAGES}")
     print(f"Observed all categories: {len(unique)} / 終了済み除外: {ended_excluded} / Watched matches: {len(matches)}")
     for item in matches[:MAX_NEW_ITEMS]:
-        print(f"MATCH: {item['title']} / {item['price']:,}円 / {item.get('location') or '場所は商品ページで確認'} / 中村区から50km圏内 / {item['url']}")
+        print(f"MATCH: {item['title']} / {item['price']:,}円 / {item.get('location') or '場所は商品ページで確認'} / 中村区から100km圏内 / {item['url']}")
     if not discord_notify(matches):
         raise RuntimeError("Discord notification failed")
 
