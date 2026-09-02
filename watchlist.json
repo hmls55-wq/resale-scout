@@ -22,7 +22,7 @@
     {"name": "Molteni&C", "aliases": ["Molteni", "Molteni&C", "モルテーニ"], "priority": "高優先"},
     {"name": "Minotti", "aliases": ["Minotti", "ミノッティ"], "priority": "高優先"},
     {"name": "Kartell", "aliases": ["Kartell", "カルテル"], "priority": "高優先"},
-    {"name": "Vitra", "aliases": ["Vitra", "ヴィトラ"], "priority": "高優先"},
+    {"name": "Vitra", "aliases": ["Vitra", "ヴィトラ", "Panton", "Panton Chair", "パントン", "パントンチェア"], "priority": "高優先"},
     {"name": "String", "aliases": ["String", "String Furniture", "ストリング"], "priority": "高優先"},
     {"name": "HAY", "aliases": ["HAY"], "priority": "高優先"},
     {"name": "&Tradition", "aliases": ["&Tradition", "アンドトラディション"], "priority": "高優先"},
