@@ -166,21 +166,30 @@ def main():
     state, initialized = load_state()
     current_urls = {x["url"] for x in items}
 
-    # 初回だけ現在の一覧を既読として登録し、過去掲載品を一気に通知しない。
-    if not initialized:
+    # 明示的なDiscordテスト。既存状態を変更せず、現在の最新1件だけを送る。
+    test_notify = os.environ.get("JIMOTY_TEST_NOTIFY", "0") == "1"
+    if test_notify:
+        new_items = items[:1]
+        if new_items:
+            discord_notify(new_items)
+            print("TEST: Discord notification sent for the current latest item; state was not changed.")
+        else:
+            raise RuntimeError("TEST: 通知対象の商品を取得できませんでした")
+        save_state(state, initialized=initialized)
+    elif not initialized:
+        # 初回だけ現在の一覧を既読として登録し、過去掲載品を一気に通知しない。
         state.update(current_urls)
         save_state(state, initialized=True)
         new_items = []
         print(f"State initialized with {len(current_urls)} URLs; no old items notified.")
     else:
         # 未通知の新着を新しい順に最大5件通知。
-        # 重要：最大5件を超えた新着は「既読」にせず、次回以降に順番に通知する。
+        # 最大5件を超えた新着は「既読」にせず、次回以降に順番に通知する。
         new_items = [x for x in items if x["url"] not in state][:MAX_NEW_ITEMS]
         print(f"New in latest {MAX_PARSED_ITEMS}: {len(new_items)}")
         if new_items:
             discord_notify(new_items)
             state.update(x["url"] for x in new_items)
-
         # 現在の一覧を一括で既読にはしない。
         # 新着のうち今回通知できなかったものを取りこぼさないため、
         # 状態に追加するのは通知成功したURLだけとする。
