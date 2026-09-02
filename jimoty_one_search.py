@@ -182,7 +182,8 @@ def main():
         state.update(current_urls)
         save_state(state, initialized=True)
 
-    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+    # 診断通知は明示的に有効化したときだけ送る。
+    if os.environ.get("JIMOTY_DIAGNOSTIC", "0") == "1":
         discord_diagnostic(len(items), len(latest_items), len(new_items), True)
 
     print("No new items; Discord notification skipped." if not new_items else f"Discord notified: {len(new_items)}")
