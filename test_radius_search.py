@@ -3,6 +3,8 @@ import urllib.request
 from html import unescape
 
 URLS = [
+    "https://jmty.jp/s/area_portal/1005342?distance=30",
+    "https://jmty.jp/s/area_portal/1005342?distance=50",
     "https://jmty.jp/aichi/sale-fur?distance=30",
     "https://jmty.jp/aichi/sale-fur?distance=50",
 ]
@@ -16,7 +18,9 @@ for url in URLS:
     with urllib.request.urlopen(req, timeout=30) as r:
         html = r.read().decode("utf-8", errors="replace")
         print("HTTP:", r.status)
+        print("FINAL URL:", r.geturl())
         print("BYTES:", len(html))
+        print("SET-COOKIE:", r.headers.get("Set-Cookie", ""))
 
     articles = re.findall(r"/aichi/sale-fur/article-[a-z0-9]+", html)
     articles = list(dict.fromkeys(articles))
@@ -25,8 +29,7 @@ for url in URLS:
     for x in articles[:10]:
         print(" ", x)
 
-    # Extract visible-ish municipality strings to see whether cross-prefecture results appear.
     cities = sorted(set(re.findall(r"(?:愛知県|岐阜県|三重県|静岡県|長野県|滋賀県|奈良県|福井県|石川県)[^<]{0,30}", html)))
     print("REGION TEXT SAMPLES:")
-    for x in cities[:30]:
+    for x in cities[:20]:
         print(" ", unescape(x).strip())
