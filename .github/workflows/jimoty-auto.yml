@@ -1,0 +1,57 @@
+name: Jimoty Auto Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 5 minutes, offset from the top of the hour to reduce GitHub load delays.
+    - cron: "2-59/5 * * * *"
+
+concurrency:
+  group: jimoty-auto-monitor
+  cancel-in-progress: true
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore previous state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=jimoty-one-search-state&per_page=1"
+          URL=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$API" | jq -r '.artifacts[0].archive_download_url // empty')
+          if [ -n "$URL" ]; then
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$URL" -o state.zip || true
+            unzip -o state.zip -d . 2>/dev/null || true
+          fi
+          test -f jimoty_one_search_state.json || echo '{"notified_urls":[]}' > jimoty_one_search_state.json
+
+      - name: Run one-search monitor
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          JIMOTY_SEARCH_TERM: "IKEA"
+        run: python jimoty_one_search.py
+
+      - name: Upload state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jimoty-one-search-state
+          path: jimoty_one_search_state.json
+          retention-days: 7
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jimoty-one-search-result
+          path: jimoty_one_search_result.json
+          retention-days: 7
