@@ -109,10 +109,10 @@ if old4 in sc:
     sc = sc.replace(old4, new4, 1)
 scout_path.write_text(sc, encoding="utf-8")
 
-if 'def probe_keyword_pages(entries):' not in s:
-    probe = r'''
+probe = r'''
 
 def probe_keyword_pages(entries):
+    """Probe Jimoty keyword pages and keep only recent, active, clean cards."""
     probe_terms = ["カールハンセン", "パントンチェア"]
     today = datetime.now().date()
     cutoff = today - __import__("datetime").timedelta(days=7)
@@ -126,42 +126,83 @@ def probe_keyword_pages(entries):
             parser = scout.JmtyAnchorParser()
             parser.feed(html)
             print(f"  商品リンク候補: {len(parser.items)}")
+
+            # The same article can appear through several anchors. Keep one
+            # clean candidate per URL before matching or extracting metadata.
+            candidates = {}
             for anchor in parser.items:
                 href = anchor.get("href", "")
                 item_url = "https://jmty.jp" + href if href.startswith("/") else href
+                item_url = item_url.split("#", 1)[0]
                 if not item_url:
                     continue
-                pos = html.find(href)
-                if pos < 0:
-                    continue
-                # Jimoty places the status label just before the listing title.
-                # Keep this window tight so a neighboring card cannot poison the result.
-                status_block = html[max(0, pos - 1600):min(len(html), pos + 900)]
-                status_text = re.sub(r"<[^>]+>", " ", status_block)
-                status_text = re.sub(r"\s+", " ", status_text).strip()
-                if STATUS_RE.search(status_text):
-                    print(f"  KEYWORD ENDED SKIP: {anchor.get('title') or anchor.get('text','')[:100]}")
-                    continue
-                title = anchor.get("title") or anchor.get("heading") or anchor.get("title_attr") or anchor.get("text") or ""
-                if not title or STATUS_RE.search(title):
+                title = anchor.get("title") or anchor.get("heading") or normalize(anchor.get("title_attr")) or anchor.get("text") or ""
+                if not title:
                     continue
                 hits = match_watchlist({"title": title}, entries)
                 if not hits:
                     continue
-                m = re.search(r"(\d{1,2})月(\d{1,2})日", status_text)
-                if not m:
+                # Prefer a title containing both the posting date and price.
+                score = 0
+                if re.search(r"\d{1,2}月\d{1,2}日", title):
+                    score += 4
+                if scout.extract_price(title) is not None:
+                    score += 3
+                if any(norm(h.get("matched", "")) in norm(title) for h in hits):
+                    score += 2
+                score -= len(title) / 10000.0
+                old = candidates.get(item_url)
+                if old is None or score > old[0]:
+                    candidates[item_url] = (score, anchor, title, hits, href)
+
+            # Determine each card's local HTML window using neighboring article
+            # anchors, rather than a huge fixed window that can steal data from
+            # the next/previous listing.
+            positions = []
+            for href in {v[4] for v in candidates.values()}:
+                p = html.find(href)
+                if p >= 0:
+                    positions.append((p, href))
+            positions.sort()
+            pos_by_href = {href: p for p, href in positions}
+
+            for item_url, (_score, anchor, title, hits, href) in candidates.items():
+                pos = pos_by_href.get(href, html.find(href))
+                if pos < 0:
+                    continue
+                prev_positions = [p for p, _ in positions if p < pos]
+                start = prev_positions[-1] if prev_positions else max(0, pos - 1000)
+                local_block = html[start:min(len(html), pos + 500)]
+                local_text = re.sub(r"<[^>]+>", " ", local_block)
+                local_text = re.sub(r"\s+", " ", local_text).strip()
+
+                # Status is card-local; do not use the broad page text.
+                if STATUS_RE.search(title) or STATUS_RE.search(local_text):
+                    print(f"  KEYWORD ENDED SKIP: {title[:120]}")
+                    continue
+
+                # Date and price must come from the listing title first. This
+                # prevents an adjacent card's 8/11 date or 0円 from leaking in.
+                date_match = re.search(r"(\d{1,2})月(\d{1,2})日", title)
+                if not date_match:
+                    date_match = re.search(r"(\d{1,2})月(\d{1,2})日", local_text)
+                if not date_match:
                     continue
                 try:
-                    md = datetime.strptime(f"{today.year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}", "%Y-%m-%d").date()
+                    md = datetime.strptime(f"{today.year}-{int(date_match.group(1)):02d}-{int(date_match.group(2)):02d}", "%Y-%m-%d").date()
                 except ValueError:
                     continue
                 if md > today:
-                    md = datetime.strptime(f"{today.year-1}-{int(m.group(1)):02d}-{int(m.group(2)):02d}", "%Y-%m-%d").date()
+                    md = datetime.strptime(f"{today.year-1}-{int(date_match.group(1)):02d}-{int(date_match.group(2)):02d}", "%Y-%m-%d").date()
                 if md < cutoff:
                     continue
-                price = scout.extract_price(status_text)
+
+                price = scout.extract_price(title)
+                if price is None:
+                    price = scout.extract_price(local_text)
                 if price is None:
                     continue
+
                 image_urls = []
                 for src in anchor.get("images", []):
                     if src.startswith("//"):
@@ -171,9 +212,10 @@ def probe_keyword_pages(entries):
                     if src.startswith("http") and src not in image_urls:
                         image_urls.append(src)
                 item = {
-                    "title": title[:240], "price": price, "url": item_url.split("#", 1)[0],
-                    "text": status_text, "image_urls": image_urls[:5], "watch_hits": hits,
-                    "location": detect_location(status_text), "distance_km": 100, "keyword_probe": term,
+                    "title": title[:240], "price": price, "url": item_url,
+                    "text": local_text or title, "image_urls": image_urls[:5],
+                    "watch_hits": hits, "location": detect_location(title),
+                    "distance_km": 100, "keyword_probe": term,
                 }
                 out.append(item)
                 print(f"  KEYWORD RECENT MATCH: {title[:120]} / {price:,}円 / {item_url}")
@@ -181,20 +223,23 @@ def probe_keyword_pages(entries):
             print("Keyword probe failed:", repr(e))
     return out
 '''
-    marker = '\ndef main():\n'
+# Replace any previously injected probe so the runtime patch remains idempotent.
+start = s.find("\ndef probe_keyword_pages(entries):")
+if start >= 0:
+    end = s.find("\ndef main():", start)
+    if end < 0:
+        raise SystemExit("existing probe main marker not found")
+    s = s[:start] + probe + s[end:]
+else:
+    marker = "\ndef main():\n"
     if marker not in s:
         raise SystemExit("main marker not found")
     s = s.replace(marker, probe + marker, 1)
-needle = '''            print("Fetch failed:", repr(e))
 
-    unique = {item["url"]: item for item in all_items}
-'''
-replacement = '''            print("Fetch failed:", repr(e))
-
-    all_items.extend(probe_keyword_pages(entries))
-    unique = {item["url"]: item for item in all_items}
-'''
+needle = '''            print("Fetch failed:", repr(e))\n\n    unique = {item["url"]: item for item in all_items}\n'''
+replacement = '''            print("Fetch failed:", repr(e))\n\n    all_items.extend(probe_keyword_pages(entries))\n    unique = {item["url"]: item for item in all_items}\n'''
 if needle in s:
     s = s.replace(needle, replacement, 1)
+
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: title-only matching, card-local status/price, recent keyword probe with ended-card exclusion")
+print("Patched watcher: title-only matching, card-local status/price, deduped recent keyword probe")
