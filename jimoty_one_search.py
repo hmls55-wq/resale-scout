@@ -51,24 +51,28 @@ def extract_price(text):
 
 
 def extract_items(html):
-    # 各 article リンクの位置から次の article リンク直前までを1商品として扱う。
-    # 固定の±5000文字だと、長い商品説明で「作成日時」が範囲外になるため。
-    matches = list(re.finditer(
+    # 同じ商品URLへのリンクが1カード内に複数存在するため、
+    # まずURLごとに最初のリンク位置だけを残してから商品ブロックを切り出す。
+    raw_matches = list(re.finditer(
         r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>',
         html, re.I | re.S
     ))
-    seen = set()
-    items = []
-    for i, m in enumerate(matches):
+
+    matches = []
+    seen_urls = set()
+    for m in raw_matches:
         href = m.group(1)
         url = href if href.startswith("http") else "https://jmty.jp" + href
         url = url.split("#", 1)[0]
-        if url in seen:
+        if url in seen_urls:
             continue
-        seen.add(url)
+        seen_urls.add(url)
+        matches.append((m, url))
 
+    items = []
+    for i, (m, url) in enumerate(matches):
         start = m.start()
-        end = matches[i + 1].start() if i + 1 < len(matches) else min(len(html), start + 20000)
+        end = matches[i + 1][0].start() if i + 1 < len(matches) else min(len(html), start + 20000)
         block = html[max(0, start - 300):end]
         text = clean(block)
 
@@ -85,8 +89,8 @@ def extract_items(html):
 
 
 def today_created(text, now):
-    # 「作成9月2日」「作成 9月2日」などを許容。
-    return re.search(rf"作成\s*{now.month}月\s*{now.day}日", text) is not None
+    # 「作成9月2日」「作成 9月2日」「作成 9月 2日」などを許容。
+    return re.search(rf"作成\s*{now.month}\s*月\s*{now.day}\s*日", text) is not None
 
 
 def load_state():
@@ -163,10 +167,18 @@ def main():
     today_items = [x for x in items if today_created(x["text"], now)]
     print(f"Parsed: {len(items)}, today: {len(today_items)}")
 
-    # 今日判定が0件の場合でも、日時文字列が実際に取れているか確認できるよう診断情報を出す。
     if items:
         created_hits = sum(1 for x in items if "作成" in x["text"])
         print(f"Items containing 作成: {created_hits}")
+        if not today_items:
+            date_samples = []
+            for x in items:
+                m = re.search(r"作成.{0,30}", x["text"])
+                if m:
+                    date_samples.append(m.group(0)[:60])
+                if len(date_samples) >= 5:
+                    break
+            print(f"作成日時サンプル: {date_samples}")
 
     state = load_state()
     new_items = [x for x in today_items if x["url"] not in state]
