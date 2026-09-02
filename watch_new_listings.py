@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -20,6 +21,10 @@ AREA_LABEL = "名古屋市中村区・50km圏内"
 AREA_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 STATUS_RE = re.compile(r"受付終了|掲載終了|募集終了|取引終了|終了しました|終了済み")
 
+# 短すぎて一般語の一部に入りやすい表記は、単純な部分一致をしない。
+# 例: ノル ← ミノルフォン、No.2 ← No.202 のような誤検出を防ぐ。
+SHORT_ALIAS_MAX = 3
+
 
 def load_json(path, default):
     try:
@@ -29,8 +34,7 @@ def load_json(path, default):
 
 
 def norm(s):
-    """Compare names while ignoring harmless typography differences."""
-    import unicodedata
+    """Compact normalization for harmless spelling/typography variations."""
     s = unicodedata.normalize("NFKC", str(s or "")).lower()
     return re.sub(r"[^0-9a-zぁ-んァ-ヶ一-龯々ー]+", "", s)
 
@@ -40,18 +44,36 @@ def load_watchlist():
     return data.get("brands", []) + [{"name": x, "aliases": [x], "priority": "キーワード"} for x in data.get("extra_terms", [])]
 
 
-def match_watchlist(item, entries):
-    text = norm(" ".join([item.get("title", ""), item.get("text", "")]))
-    hits, seen = [], set()
-    for entry in entries:
-        for alias in entry.get("aliases", []):
-            a = norm(alias)
-            name = entry.get("name", alias)
-            if a and a in text and name not in seen:
-                hits.append({"name": name, "matched": alias, "priority": entry.get("priority", "監視")})
-                seen.add(name)
-                break
-    return hits
+def short_alias_match(alias, original_text):
+    """Match short aliases only at a natural word boundary.
+
+    Japanese does not normally use spaces between words, so a short alias is
+    allowed at the beginning/end of a token or next to punctuation/Latin
+    separators, but not inside another Japanese word.
+    """
+    a = unicodedata.normalize("NFKC", str(alias or "")).lower().strip()
+    if not a:
+        return False
+    text = unicodedata.normalize("NFKC", str(original_text or "")).lower()
+    # Keep punctuation as separators for boundary matching.
+    pattern = re.escape(a)
+    # If the alias is all Latin/digits, normal word boundaries are safer.
+    if re.fullmatch(r"[0-9a-z]+", a):
+        return re.search(rf"(?<![0-9a-z]){pattern}(?![0-9a-z])", text) is not None
+    # Japanese short aliases: don't allow a Japanese/Latin/digit character
+    # immediately before the alias. At the beginning is OK (e.g. ノルチェア).
+    return re.search(rf"(?<![0-9a-zぁ-んァ-ヶ一-龯々ー]){pattern}", text) is not None
+
+
+def alias_matches(alias, compact_text, original_text):
+    a = norm(alias)
+    if not a:
+        return False
+    # Short aliases and model numbers need boundaries; long names can use
+    # compact matching so punctuation/spacing variations still work.
+    if len(a) <= SHORT_ALIAS_MAX:
+        return short_alias_match(alias, original_text)
+    return a in compact_text
 
 
 def load_state():
@@ -68,6 +90,20 @@ def save_state(state):
         "seen_urls": list(state["seen_urls"])[-5000:],
         "notified_match_urls": list(state["notified_match_urls"])[-5000:],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def match_watchlist(item, entries):
+    original_text = " ".join([item.get("title", ""), item.get("text", "")])
+    compact_text = norm(original_text)
+    hits, seen = [], set()
+    for entry in entries:
+        for alias in entry.get("aliases", []):
+            name = entry.get("name", alias)
+            if alias_matches(alias, compact_text, original_text) and name not in seen:
+                hits.append({"name": name, "matched": alias, "priority": entry.get("priority", "監視")})
+                seen.add(name)
+                break
+    return hits
 
 
 def fetch_area_page(url):
@@ -89,18 +125,13 @@ def fetch_area_page(url):
 def detect_location(text):
     cities = ["名古屋市", "一宮市", "稲沢市", "清須市", "北名古屋市", "岩倉市", "江南市", "犬山市", "小牧市", "春日井市", "瀬戸市", "尾張旭市", "長久手市", "日進市", "豊明市", "東郷町", "みよし市", "豊田市", "岡崎市", "安城市", "刈谷市", "知立市", "高浜市", "碧南市", "西尾市", "大府市", "東海市", "知多市", "半田市", "常滑市", "弥富市", "津島市", "愛西市", "あま市", "大治町", "蟹江町", "豊山町", "豊川市"]
     for city in sorted(cities, key=len, reverse=True):
-        if city in text: return city
+        if city in text:
+            return city
     return None
 
 
 def rescue_watchlist_items(html, entries, parsed_items):
-    """Recover watchlist items that scout.extract_items() dropped during parsing.
-
-    The normal parser intentionally requires a price. This rescue path only
-    examines raw article anchors whose own text matches the watchlist, then
-    searches a larger nearby HTML window for the price. This prevents a
-    malformed/advert-heavy card from hiding a wanted listing.
-    """
+    """Recover watchlist items that the normal parser dropped."""
     existing = {item.get("url") for item in parsed_items}
     rescued = []
     try:
@@ -120,7 +151,6 @@ def rescue_watchlist_items(html, entries, parsed_items):
         hits = match_watchlist(probe, entries)
         if not hits:
             continue
-
         pos = html.find(href)
         block = ""
         if pos >= 0:
@@ -132,14 +162,14 @@ def rescue_watchlist_items(html, entries, parsed_items):
         if price is None:
             print(f"  WATCHLIST RAW HIT but price not found: {title[:120]} / {url}")
             continue
-
         image_urls = []
         for src in anchor.get("images", []):
-            if src.startswith("//"): src = "https:" + src
-            elif src.startswith("/"): src = "https://jmty.jp" + src
+            if src.startswith("//"):
+                src = "https:" + src
+            elif src.startswith("/"):
+                src = "https://jmty.jp" + src
             if src.startswith("http") and src not in image_urls:
                 image_urls.append(src)
-
         item = {
             "title": title[:240],
             "price": price,
@@ -158,19 +188,25 @@ def rescue_watchlist_items(html, entries, parsed_items):
 
 def discord_notify(items):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-    if not webhook: return False if items else True
+    if not webhook:
+        return False if items else True
     if not items:
-        print("Discord: no matching items; notification skipped."); return True
-    send_items = items[:MAX_NEW_ITEMS]; print(f"Discord: sending {len(send_items)} notification(s)..."); ok = True
+        print("Discord: no matching items; notification skipped.")
+        return True
+    send_items = items[:MAX_NEW_ITEMS]
+    print(f"Discord: sending {len(send_items)} notification(s)...")
+    ok = True
     for index, item in enumerate(send_items):
-        if index: time.sleep(DISCORD_MIN_INTERVAL)
+        if index:
+            time.sleep(DISCORD_MIN_INTERVAL)
         hits = ", ".join(h["name"] for h in item.get("watch_hits", [])[:4]) or "監視一致"
         priority = "🔥" if any(h.get("priority") == "最優先" for h in item.get("watch_hits", [])) else "🟡"
         image = (item.get("image_urls") or [None])[0]
         location = item.get("location") or "場所は商品ページで確認"
         rescue = " / パーサー救済" if item.get("rescue") else ""
         embed = {"title": f"{priority} {item.get('title', 'ジモティー商品')[:240]}", "url": item.get("url"), "description": f"監視一致：{hits}\n価格：{item.get('price', 0):,}円\n場所：{location}\n検索条件：{AREA_LABEL}\n\nジモティーの距離検索結果から全カテゴリーを監視 / 終了済み除外{rescue}", "footer": {"text": "Resell Scout"}}
-        if image: embed["image"] = {"url": image}
+        if image:
+            embed["image"] = {"url": image}
         payload = json.dumps({"content": "🚨 ジモティー仕入れ候補", "embeds": [embed]}, ensure_ascii=False).encode("utf-8")
         delivered = False
         for attempt in range(1, DISCORD_RETRIES + 1):
@@ -178,21 +214,33 @@ def discord_notify(items):
                 req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ResellScout/1.0"}, method="POST")
                 with urllib.request.urlopen(req, timeout=15) as r:
                     print(f"Discord: HTTP {r.status} for {item.get('title', 'item')}")
-                    if r.status in (200, 204): delivered = True; break
+                    if r.status in (200, 204):
+                        delivered = True
+                        break
             except urllib.error.HTTPError as e:
                 if e.code == 429:
-                    try: wait = max(float(e.headers.get("Retry-After", "1.5")), 1.5) + 0.25
-                    except ValueError: wait = 2.0
-                    print(f"Discord: HTTP 429; retry {attempt}/{DISCORD_RETRIES} after {wait:.2f}s"); time.sleep(wait); continue
-                print("Discord notification HTTP error:", e.code, repr(e)); break
+                    try:
+                        wait = max(float(e.headers.get("Retry-After", "1.5")), 1.5) + 0.25
+                    except ValueError:
+                        wait = 2.0
+                    print(f"Discord: HTTP 429; retry {attempt}/{DISCORD_RETRIES} after {wait:.2f}s")
+                    time.sleep(wait)
+                    continue
+                print("Discord notification HTTP error:", e.code, repr(e))
+                break
             except Exception as e:
-                print("Discord notification error:", repr(e)); break
-        if not delivered: ok = False; print(f"Discord: delivery failed: {item.get('title', 'item')}")
+                print("Discord notification error:", repr(e))
+                break
+        if not delivered:
+            ok = False
+            print(f"Discord: delivery failed: {item.get('title', 'item')}")
     return ok
 
 
 def main():
-    entries = load_watchlist(); state = load_state(); all_items = []
+    entries = load_watchlist()
+    state = load_state()
+    all_items = []
     for page in range(1, SCAN_PAGES + 1):
         url = AREA_PORTAL_BASE if page == 1 else f"{AREA_PORTAL_BASE}&page={page}"
         print("Fetching:", url)
@@ -237,4 +285,5 @@ def main():
         raise RuntimeError("Discord notification failed")
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
