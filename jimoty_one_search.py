@@ -51,30 +51,49 @@ def extract_price(text):
 
 
 def extract_items(html):
-    # 同じ商品URLへのリンクが1カード内に複数存在するため、
-    # まずURLごとに最初のリンク位置だけを残してから商品ブロックを切り出す。
-    raw_matches = list(re.finditer(
+    # ジモティーは商品カードのリンクと「作成日時」のHTML上の距離が
+    # 一定ではないため、リンク単位で固定文字数を切り出す方式は使わない。
+    # まず商品リンクと作成日時をそれぞれ全件抽出し、近い日時を商品へ関連付ける。
+    matches = list(re.finditer(
         r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>',
         html, re.I | re.S
     ))
+    date_matches = list(re.finditer(
+        r"作成\s*([0-9０-９]{1,2})月\s*([0-9０-９]{1,2})日",
+        html
+    ))
 
-    matches = []
-    seen_urls = set()
-    for m in raw_matches:
+    seen = set()
+    used_dates = set()
+    items = []
+    for m in matches:
         href = m.group(1)
         url = href if href.startswith("http") else "https://jmty.jp" + href
         url = url.split("#", 1)[0]
-        if url in seen_urls:
+        if url in seen:
             continue
-        seen_urls.add(url)
-        matches.append((m, url))
+        seen.add(url)
 
-    items = []
-    for i, (m, url) in enumerate(matches):
-        start = m.start()
-        end = matches[i + 1][0].start() if i + 1 < len(matches) else min(len(html), start + 20000)
-        block = html[max(0, start - 300):end]
+        # 商品リンクの前後15,000文字以内にある「作成日」のうち、最も近いものを採用。
+        candidates = []
+        for d in date_matches:
+            if d.start() in used_dates:
+                continue
+            distance = abs(d.start() - m.start())
+            if distance <= 15000:
+                candidates.append((distance, d))
+        candidates.sort(key=lambda x: x[0])
+        date_match = candidates[0][1] if candidates else None
+        if date_match:
+            used_dates.add(date_match.start())
+
+        # 価格・タイトル用には商品リンク周辺を広めに見る。
+        start = max(0, m.start() - 3000)
+        end = min(len(html), m.start() + 15000)
+        block = html[start:end]
         text = clean(block)
+        if date_match:
+            text += " 作成" + date_match.group(1) + "月" + date_match.group(2) + "日"
 
         title = clean(m.group(2))
         title = re.sub(r"お気に入り.*$", "", title).strip()
@@ -89,8 +108,7 @@ def extract_items(html):
 
 
 def today_created(text, now):
-    # 「作成9月2日」「作成 9月2日」「作成 9月 2日」などを許容。
-    return re.search(rf"作成\s*{now.month}\s*月\s*{now.day}\s*日", text) is not None
+    return re.search(rf"作成\s*{now.month}月\s*{now.day}日", text) is not None
 
 
 def load_state():
@@ -170,15 +188,8 @@ def main():
     if items:
         created_hits = sum(1 for x in items if "作成" in x["text"])
         print(f"Items containing 作成: {created_hits}")
-        if not today_items:
-            date_samples = []
-            for x in items:
-                m = re.search(r"作成.{0,30}", x["text"])
-                if m:
-                    date_samples.append(m.group(0)[:60])
-                if len(date_samples) >= 5:
-                    break
-            print(f"作成日時サンプル: {date_samples}")
+        samples = [re.search(r"作成\s*[0-9０-９]{1,2}月\s*[0-9０-９]{1,2}日", x["text"]).group(0) for x in items if re.search(r"作成\s*[0-9０-９]{1,2}月\s*[0-9０-９]{1,2}日", x["text"])]
+        print(f"作成日時サンプル: {samples[:10]}")
 
     state = load_state()
     new_items = [x for x in today_items if x["url"] not in state]
