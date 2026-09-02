@@ -56,7 +56,6 @@ def load_state():
 
 
 def save_state(seen):
-    # Keep the state bounded. The newest URLs are most useful for duplicate suppression.
     urls = list(seen)[-5000:]
     STATE_PATH.write_text(
         json.dumps({"updated_at": datetime.now().isoformat(timespec="seconds"), "seen_urls": urls}, ensure_ascii=False, indent=2),
@@ -73,18 +72,18 @@ def discord_notify(items):
 
     ok = True
     for item in items[:MAX_NEW_ITEMS]:
-        hits = ", ".join(h["name"] for h in item["watch_hits"][:4])
-        priority = "🔥" if any(h["priority"] == "最優先" for h in item["watch_hits"]) else "🟡"
+        hits = ", ".join(h["name"] for h in item.get("watch_hits", [])[:4]) or "通信テスト"
+        priority = "🔥" if any(h.get("priority") == "最優先" for h in item.get("watch_hits", [])) else "🟡"
         image = (item.get("image_urls") or [None])[0]
         embed = {
-            "title": f"{priority} 新着発見：{item.get('title', '商品')[:240]}",
+            "title": f"{priority} {item.get('title', 'ジモティー商品')[:240]}",
             "url": item.get("url"),
-            "description": f"監視一致：{hits}\n価格：{item.get('price'):,}円\n\nGoogle画像検索・メルカリ相場はあなたが確認してください。",
+            "description": f"監視一致：{hits}\n価格：{item.get('price', 0):,}円\n\nResell Scout 通知経路テスト",
             "footer": {"text": "Resell Scout"},
         }
         if image:
             embed["image"] = {"url": image}
-        payload = json.dumps({"content": "🚨 ジモティー新着", "embeds": [embed]}, ensure_ascii=False).encode("utf-8")
+        payload = json.dumps({"content": "🚨 ジモティー通知テスト", "embeds": [embed]}, ensure_ascii=False).encode("utf-8")
         try:
             req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ResellScout/1.0"}, method="POST")
             with urllib.request.urlopen(req, timeout=15) as r:
@@ -110,8 +109,6 @@ def main():
         except Exception as e:
             print("Fetch failed:", repr(e))
 
-    # Deduplicate by product URL. In one-time test mode, allow already-seen listings
-    # through so we can verify the real Jimoty -> Discord notification path.
     unique = {}
     for item in all_items:
         unique[item["url"]] = item
@@ -125,12 +122,18 @@ def main():
             item["watch_hits"] = hits
             matches.append(item)
 
-    # Mark every observed URL as seen, not only matches, so an old non-match does not
-    # suddenly become a notification duplicate after the watchlist changes.
+    # In the one-time commit-triggered test, always send the first live listing
+    # so Discord delivery can be verified independently of watchlist matching.
+    if force_current and not matches and unique:
+        first_item = next(iter(unique.values()))
+        first_item["watch_hits"] = [{"name": "通信テスト", "matched": "強制テスト", "priority": "監視"}]
+        matches = [first_item]
+        print("No watchlist match; using first live listing for Discord delivery test.")
+
     seen.update(unique.keys())
     save_state(seen)
 
-    matches.sort(key=lambda x: (0 if any(h["priority"] == "最優先" for h in x["watch_hits"]) else 1, x.get("price", 0)))
+    matches.sort(key=lambda x: (0 if any(h.get("priority") == "最優先" for h in x.get("watch_hits", [])) else 1, x.get("price", 0)))
     Path("new_matches.json").write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "count": len(matches),
