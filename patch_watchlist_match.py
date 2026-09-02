@@ -2,6 +2,7 @@ from pathlib import Path
 
 watch_path = Path("watch_new_listings.py")
 s = watch_path.read_text(encoding="utf-8")
+s = s.replace("import urllib.error\nimport urllib.request", "import urllib.error\nimport urllib.request\nimport urllib.parse", 1) if "import urllib.parse" not in s else s
 old = '''def match_watchlist(item, entries):
     original_text = " ".join([item.get("title", ""), item.get("text", "")])
     compact_text = norm(original_text)
@@ -112,20 +113,19 @@ scout_path.write_text(sc, encoding="utf-8")
 probe = r'''
 
 def probe_keyword_pages(entries):
-    """Probe a rotating set of high-signal Jimoty keyword pages.
+    """Probe five high-signal Jimoty keyword pages on every run.
 
-    Five probes per run keeps the 5-minute watcher reasonably light while
-    rotating through the larger watchlist. Each probe keeps only today/yesterday
-    listings and rejects cards carrying an ended status marker.
+    The five terms rotate every five minutes through a 10-term pool. Only
+    today/yesterday listings are accepted, and ended listings are rejected.
     """
     probe_terms = [
         "カールハンセン", "パントンチェア", "Knoll", "Stokke", "Yチェア",
-        "Vitra", "ハーマンミラー", "Fritz Hansen", "Artek", "USMハラー",
+        "Vitra", "ハーマンミラー", "フリッツハンセン", "Artek", "USMハラー",
     ]
     run_slot = int(datetime.now().timestamp() // 300)
     start = run_slot % len(probe_terms)
     selected = [probe_terms[(start + i) % len(probe_terms)] for i in range(5)]
-    print("Keyword probes this run:", ", ".join(selected))
+    print(f"Keyword probes this run ({len(selected)}/5): {', '.join(selected)}")
 
     today = datetime.now().date()
     cutoff = today - __import__("datetime").timedelta(days=1)
@@ -139,7 +139,6 @@ def probe_keyword_pages(entries):
             parser = scout.JmtyAnchorParser()
             parser.feed(html)
             print(f"  商品リンク候補: {len(parser.items)}")
-
             candidates = {}
             for anchor in parser.items:
                 href = anchor.get("href", "")
@@ -180,11 +179,9 @@ def probe_keyword_pages(entries):
                 local_block = html[start_pos:min(len(html), pos + 700)]
                 local_text = re.sub(r"<[^>]+>", " ", local_block)
                 local_text = re.sub(r"\s+", " ", local_text).strip()
-
                 if STATUS_RE.search(title) or STATUS_RE.search(local_text):
                     print(f"  KEYWORD ENDED SKIP: {title[:120]}")
                     continue
-
                 date_match = re.search(r"(\d{1,2})月(\d{1,2})日", title) or re.search(r"(\d{1,2})月(\d{1,2})日", local_text)
                 if not date_match: continue
                 try:
@@ -194,10 +191,8 @@ def probe_keyword_pages(entries):
                 if md > today:
                     md = datetime.strptime(f"{today.year-1}-{int(date_match.group(1)):02d}-{int(date_match.group(2)):02d}", "%Y-%m-%d").date()
                 if md < cutoff: continue
-
                 price = scout.extract_price(title) or scout.extract_price(local_text)
                 if price is None: continue
-
                 image_urls = []
                 for src in anchor.get("images", []):
                     if src.startswith("//"): src = "https:" + src
@@ -226,9 +221,9 @@ else:
     s = s.replace(marker, probe + marker, 1)
 
 needle = '''            print("Fetch failed:", repr(e))\n\n    unique = {item["url"]: item for item in all_items}\n'''
-replacement = '''            print("Fetch failed:", repr(e))\n\n    all_items.extend(probe_keyword_pages(entries))\n    unique = {item["url"]: item for item in all_items}\n'''
+replacement = '''            print("Fetch failed:", repr(e))\n\n    probe_items = probe_keyword_pages(entries)\n    all_items.extend(probe_items)\n    print(f"Keyword probe results: {len(probe_items)} recent candidate(s)")\n    unique = {item["url"]: item for item in all_items}\n'''
 if needle in s:
     s = s.replace(needle, replacement, 1)
 
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: title-only matching, clean parser, rotating 5 keyword probes, 2-day filter")
+print("Patched watcher: 5 rotating probes, Japanese Fritz Hansen slug, title-only matching, clean parser, 2-day filter")
