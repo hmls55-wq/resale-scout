@@ -5,6 +5,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 
 import scout
@@ -15,6 +16,7 @@ MAX_NEW_ITEMS = 20
 SCAN_PAGES = int(os.environ.get("SCAN_PAGES", "5"))
 DISCORD_RETRIES = 4
 DISCORD_MIN_INTERVAL = 1.25
+DETAIL_MIN_INTERVAL = 0.5
 AREA_PORTAL_BASE = "https://jmty.jp/s/area_portal/1005342?distance=50"
 AREA_LABEL = "名古屋市中村区・50km圏内"
 AREA_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
@@ -72,11 +74,65 @@ def fetch_area_page(url):
         return html
 
 
+def fetch_detail_page(url):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": AREA_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "Referer": "https://jmty.jp/",
+    })
+    with urllib.request.urlopen(req, timeout=30) as r:
+        html = r.read().decode("utf-8", errors="ignore")
+        if len(html) < 5_000:
+            raise RuntimeError(f"詳細ページHTMLが短すぎます ({len(html)} bytes)")
+        return html
+
+
 def detect_location(text):
     cities = ["名古屋市", "一宮市", "稲沢市", "清須市", "北名古屋市", "岩倉市", "江南市", "犬山市", "小牧市", "春日井市", "瀬戸市", "尾張旭市", "長久手市", "日進市", "豊明市", "東郷町", "みよし市", "豊田市", "岡崎市", "安城市", "刈谷市", "知立市", "高浜市", "碧南市", "西尾市", "大府市", "東海市", "知多市", "半田市", "常滑市", "弥富市", "津島市", "愛西市", "あま市", "大治町", "蟹江町", "豊山町", "豊川市"]
     for city in sorted(cities, key=len, reverse=True):
         if city in text: return city
     return None
+
+
+def extract_detail_location(html):
+    clean = unescape(html)
+    clean = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>|<noscript[\s\S]*?</noscript>", " ", clean, flags=re.I)
+    clean = re.sub(r"<[^>]+>", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+    marker = re.search(r"受け渡し場所", clean)
+    if not marker:
+        return None
+    nearby = clean[marker.end():marker.end() + 500]
+    cities = ["名古屋市", "一宮市", "稲沢市", "清須市", "北名古屋市", "岩倉市", "江南市", "犬山市", "小牧市", "春日井市", "瀬戸市", "尾張旭市", "長久手市", "日進市", "豊明市", "東郷町", "みよし市", "豊田市", "岡崎市", "安城市", "刈谷市", "知立市", "高浜市", "碧南市", "西尾市", "大府市", "東海市", "知多市", "半田市", "常滑市", "弥富市", "津島市", "愛西市", "あま市", "大治町", "蟹江町", "豊山町", "豊川市"]
+    city_pattern = "(?:" + "|".join(sorted(map(re.escape, cities), key=len, reverse=True)) + ")"
+    match = re.search(city_pattern + r"\s*-\s*[^\s|]{1,20}(?:\s*-\s*[^\s|]{1,30})?", nearby)
+    if match:
+        return re.sub(r"\s+", " ", match.group(0)).strip()
+    match = re.search(city_pattern + r"\s+[^\s|]{1,20}(?:\s+[^\s|]{1,30})?", nearby)
+    if match:
+        value = re.split(r"(?:JR|名古屋市営|名鉄|近鉄|あおなみ線|東海交通事業)", match.group(0).strip())[0].strip()
+        return value or None
+    return None
+
+
+def enrich_locations(matches):
+    if not matches:
+        return
+    print(f"Detail location: {len(matches)} matching item(s) only")
+    for index, item in enumerate(matches, 1):
+        if index > 1:
+            time.sleep(DETAIL_MIN_INTERVAL)
+        try:
+            location = extract_detail_location(fetch_detail_page(item["url"]))
+            if location:
+                item["location"] = location
+                print(f"  LOCATION: {location} / {item.get('title', 'item')}")
+            else:
+                print(f"  LOCATION: not found / {item.get('title', 'item')}")
+        except Exception as e:
+            print(f"  Detail fetch failed: {item.get('url')} / {e!r}")
 
 
 def discord_notify(items):
@@ -135,6 +191,7 @@ def main():
         if hits:
             item["watch_hits"] = hits; item["location"] = detect_location(text); item["distance_km"] = 50; matches.append(item)
     seen.update(unique.keys()); save_state(seen)
+    enrich_locations(matches)
     matches.sort(key=lambda x: (0 if any(h.get("priority") == "最優先" for h in x.get("watch_hits", [])) else 1, x.get("price", 0)))
     Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": f"AREA-PORTAL-50KM-P{SCAN_PAGES}", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Mode: AREA-PORTAL-50KM-P{SCAN_PAGES}"); print(f"Observed furniture: {len(unique)} / 終了済み除外: {ended_excluded} / Watched matches: {len(matches)}")
