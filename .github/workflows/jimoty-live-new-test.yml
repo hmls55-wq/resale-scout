@@ -1,0 +1,39 @@
+name: Jimoty Live New Item Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Live new-item test
+        env:
+          JIMOTY_SEARCH_TERM: "IKEA"
+        run: |
+          set -e
+          rm -f jimoty_live_snapshot.json
+          python jimoty_live_new_test.py
+          for i in $(seq 1 6); do
+            echo "===== LIVE CHECK $i/6 ====="
+            sleep 290
+            python jimoty_live_new_test.py
+            if grep -q '"new_items": \[' jimoty_live_snapshot.json; then
+              COUNT=$(python - <<'PY'
+          import json
+          with open('jimoty_live_snapshot.json', encoding='utf-8') as f:
+              print(len(json.load(f).get('new_items', [])))
+          PY
+              )
+              if [ "$COUNT" -gt 0 ]; then
+                echo "LIVE NEW ITEM DETECTED: $COUNT"
+                exit 0
+              fi
+            fi
+          done
+          echo "No new IKEA listing appeared during the live test window."
+          exit 0
