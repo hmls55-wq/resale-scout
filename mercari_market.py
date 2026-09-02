@@ -129,13 +129,13 @@ def browser_lookup(page, query, debug=False):
     page.on("request", on_request)
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=TIMEOUT)
-        page.wait_for_timeout(3000)
+        time.sleep(3)
         try:
             page.locator('a[href*="/item/"]').first.wait_for(timeout=8000)
         except Exception:
             pass
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(1200)
+        time.sleep(1.2)
         rows, samples = [], []
         for payload in payloads:
             r, s = parse_payload(payload, assume_sold=True)
@@ -150,7 +150,7 @@ def browser_lookup(page, query, debug=False):
                 if "US$" in text or "USD" in text or "オークション" in text: continue
                 prices = jpy_prices(text)
                 if prices and ("売り切れ" in text or "SOLD" in text.upper()):
-                    rows.append({"url":d.get("href"), "title":text[:500], "price":prices[0], "sold":True, "price_source":"dom_jpy"})
+                    rows.append({"url":d.get("href"), "title":text[:500], "price":prices[0], "sold":True,"price_source":"dom_jpy"})
         if debug:
             body = norm(page.locator("body").inner_text())
             DEBUG_TEXT.write_text("URL=" + page.url + "\n" + f"PAYLOADS={len(payloads)}\nROWS={len(rows)}\nDOM={len(dom)}\nREQUEST_URLS={request_urls[-20:]}\nRESPONSE_URLS={response_urls[-20:]}\nSAMPLES={samples[:15]}\nBODY={body[:20000]}", encoding="utf-8")
