@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SEARCH_TERM = os.environ.get("JIMOTY_SEARCH_TERM", "カリモク")
+SEARCH_TERM = os.environ.get("JIMOTY_SEARCH_TERM", "IKEA")
 STATE_PATH = Path("jimoty_one_search_state.json")
 MAX_NEW_ITEMS = 20
 DISCORD_RETRIES = 4
@@ -51,25 +51,33 @@ def extract_price(text):
 
 
 def extract_items(html):
-    links = re.findall(r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S)
+    # 各 article リンクの位置から次の article リンク直前までを1商品として扱う。
+    # 固定の±5000文字だと、長い商品説明で「作成日時」が範囲外になるため。
+    matches = list(re.finditer(
+        r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>',
+        html, re.I | re.S
+    ))
     seen = set()
     items = []
-    for href, inner in links:
+    for i, m in enumerate(matches):
+        href = m.group(1)
         url = href if href.startswith("http") else "https://jmty.jp" + href
         url = url.split("#", 1)[0]
         if url in seen:
             continue
         seen.add(url)
-        pos = html.find(href)
-        if pos < 0:
-            continue
-        block = html[max(0, pos - 800):min(len(html), pos + 5000)]
+
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else min(len(html), start + 20000)
+        block = html[max(0, start - 300):end]
         text = clean(block)
-        title = clean(inner)
+
+        title = clean(m.group(2))
         title = re.sub(r"お気に入り.*$", "", title).strip()
         price = extract_price(text)
         if not title or price is None:
             continue
+
         items.append({"title": title[:200], "price": price, "url": url, "text": text})
         if len(items) >= 100:
             break
@@ -77,6 +85,7 @@ def extract_items(html):
 
 
 def today_created(text, now):
+    # 「作成9月2日」「作成 9月2日」などを許容。
     return re.search(rf"作成\s*{now.month}月\s*{now.day}日", text) is not None
 
 
@@ -136,7 +145,7 @@ def discord_diagnostic(parsed, today, new_items):
     post_discord(webhook, {
         "content": "🧪 ジモティー監視テスト接続OK",
         "embeds": [{
-            "title": "カリモク検索の診断結果",
+            "title": f"{SEARCH_TERM}検索の診断結果",
             "description": f"検索ページ取得：OK\n取得商品数：{parsed}件\n今日判定：{today}件\nDiscord通知対象：{new_items}件\n\nこのメッセージが届けばDiscord接続は正常です。",
             "footer": {"text": "Resell Scout / Jimoty one-search diagnostic"},
         }],
@@ -153,6 +162,11 @@ def main():
     items = extract_items(html)
     today_items = [x for x in items if today_created(x["text"], now)]
     print(f"Parsed: {len(items)}, today: {len(today_items)}")
+
+    # 今日判定が0件の場合でも、日時文字列が実際に取れているか確認できるよう診断情報を出す。
+    if items:
+        created_hits = sum(1 for x in items if "作成" in x["text"])
+        print(f"Items containing 作成: {created_hits}")
 
     state = load_state()
     new_items = [x for x in today_items if x["url"] not in state]
