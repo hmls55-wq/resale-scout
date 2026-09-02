@@ -112,12 +112,25 @@ scout_path.write_text(sc, encoding="utf-8")
 probe = r'''
 
 def probe_keyword_pages(entries):
-    """Probe Jimoty keyword pages and keep only recent, active, clean cards."""
-    probe_terms = ["カールハンセン", "パントンチェア"]
+    """Probe a rotating set of high-signal Jimoty keyword pages.
+
+    Five probes per run keeps the 5-minute watcher reasonably light while
+    rotating through the larger watchlist. Each probe keeps only today/yesterday
+    listings and rejects cards carrying an ended status marker.
+    """
+    probe_terms = [
+        "カールハンセン", "パントンチェア", "Knoll", "Stokke", "Yチェア",
+        "Vitra", "ハーマンミラー", "Fritz Hansen", "Artek", "USMハラー",
+    ]
+    run_slot = int(datetime.now().timestamp() // 300)
+    start = run_slot % len(probe_terms)
+    selected = [probe_terms[(start + i) % len(probe_terms)] for i in range(5)]
+    print("Keyword probes this run:", ", ".join(selected))
+
     today = datetime.now().date()
     cutoff = today - __import__("datetime").timedelta(days=1)
     out = []
-    for term in probe_terms:
+    for term in selected:
         slug = urllib.parse.quote(term, safe="")
         url = f"https://jmty.jp/aichi/sale-kw-{slug}?distance=100"
         print("Keyword probe:", url)
@@ -135,8 +148,6 @@ def probe_keyword_pages(entries):
                 if not item_url:
                     continue
                 title = anchor.get("title") or anchor.get("heading") or normalize(anchor.get("title_attr")) or anchor.get("text") or ""
-                # Strip Jimoty's UI text that sometimes sits inside the same
-                # anchor after the actual listing title.
                 title = re.split(r"お気に入りに登録しました|お気に入り一覧|ログインが必要です", title)[0].strip()
                 if not title:
                     continue
@@ -144,12 +155,9 @@ def probe_keyword_pages(entries):
                 if not hits:
                     continue
                 score = 0
-                if re.search(r"\d{1,2}月\d{1,2}日", title):
-                    score += 4
-                if scout.extract_price(title) is not None:
-                    score += 3
-                if any(norm(h.get("matched", "")) in norm(title) for h in hits):
-                    score += 2
+                if re.search(r"\d{1,2}月\d{1,2}日", title): score += 4
+                if scout.extract_price(title) is not None: score += 3
+                if any(norm(h.get("matched", "")) in norm(title) for h in hits): score += 2
                 score -= len(title) / 10000.0
                 old = candidates.get(item_url)
                 if old is None or score > old[0]:
@@ -159,20 +167,17 @@ def probe_keyword_pages(entries):
             for anchor in parser.items:
                 href = anchor.get("href", "")
                 p = html.find(href)
-                if p >= 0:
-                    all_positions.append((p, href))
+                if p >= 0: all_positions.append((p, href))
             all_positions.sort()
             first_pos_by_href = {}
-            for p, href in all_positions:
-                first_pos_by_href.setdefault(href, p)
+            for p, href in all_positions: first_pos_by_href.setdefault(href, p)
 
             for item_url, (_score, anchor, title, hits, href) in candidates.items():
                 pos = first_pos_by_href.get(href, html.find(href))
-                if pos < 0:
-                    continue
+                if pos < 0: continue
                 prev_positions = [p for p, _ in all_positions if p < pos]
-                start = prev_positions[-1] if prev_positions else max(0, pos - 1000)
-                local_block = html[start:min(len(html), pos + 700)]
+                start_pos = prev_positions[-1] if prev_positions else max(0, pos - 1000)
+                local_block = html[start_pos:min(len(html), pos + 700)]
                 local_text = re.sub(r"<[^>]+>", " ", local_block)
                 local_text = re.sub(r"\s+", " ", local_text).strip()
 
@@ -180,34 +185,24 @@ def probe_keyword_pages(entries):
                     print(f"  KEYWORD ENDED SKIP: {title[:120]}")
                     continue
 
-                date_match = re.search(r"(\d{1,2})月(\d{1,2})日", title)
-                if not date_match:
-                    date_match = re.search(r"(\d{1,2})月(\d{1,2})日", local_text)
-                if not date_match:
-                    continue
+                date_match = re.search(r"(\d{1,2})月(\d{1,2})日", title) or re.search(r"(\d{1,2})月(\d{1,2})日", local_text)
+                if not date_match: continue
                 try:
                     md = datetime.strptime(f"{today.year}-{int(date_match.group(1)):02d}-{int(date_match.group(2)):02d}", "%Y-%m-%d").date()
                 except ValueError:
                     continue
                 if md > today:
                     md = datetime.strptime(f"{today.year-1}-{int(date_match.group(1)):02d}-{int(date_match.group(2)):02d}", "%Y-%m-%d").date()
-                if md < cutoff:
-                    continue
+                if md < cutoff: continue
 
-                price = scout.extract_price(title)
-                if price is None:
-                    price = scout.extract_price(local_text)
-                if price is None:
-                    continue
+                price = scout.extract_price(title) or scout.extract_price(local_text)
+                if price is None: continue
 
                 image_urls = []
                 for src in anchor.get("images", []):
-                    if src.startswith("//"):
-                        src = "https:" + src
-                    elif src.startswith("/"):
-                        src = "https://jmty.jp" + src
-                    if src.startswith("http") and src not in image_urls:
-                        image_urls.append(src)
+                    if src.startswith("//"): src = "https:" + src
+                    elif src.startswith("/"): src = "https://jmty.jp" + src
+                    if src.startswith("http") and src not in image_urls: image_urls.append(src)
                 item = {
                     "title": title[:240], "price": price, "url": item_url,
                     "text": local_text or title, "image_urls": image_urls[:5],
@@ -223,13 +218,11 @@ def probe_keyword_pages(entries):
 start = s.find("\ndef probe_keyword_pages(entries):")
 if start >= 0:
     end = s.find("\ndef main():", start)
-    if end < 0:
-        raise SystemExit("existing probe main marker not found")
+    if end < 0: raise SystemExit("existing probe main marker not found")
     s = s[:start] + probe + s[end:]
 else:
     marker = "\ndef main():\n"
-    if marker not in s:
-        raise SystemExit("main marker not found")
+    if marker not in s: raise SystemExit("main marker not found")
     s = s.replace(marker, probe + marker, 1)
 
 needle = '''            print("Fetch failed:", repr(e))\n\n    unique = {item["url"]: item for item in all_items}\n'''
@@ -238,4 +231,4 @@ if needle in s:
     s = s.replace(needle, replacement, 1)
 
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: clean keyword titles, title-only matching, card-local status, 2-day probe")
+print("Patched watcher: title-only matching, clean parser, rotating 5 keyword probes, 2-day filter")
