@@ -39,6 +39,14 @@ def price_obj(v):
     if isinstance(v, (int, float)):
         n = int(v)
         return n if MIN_PRICE <= n <= MAX_PRICE else None
+    if isinstance(v, str):
+        # API may encode JPY amount as a string such as "96000" or "96,000".
+        s = v.strip().replace(",", "")
+        if s.isdigit():
+            n = int(s)
+            return n if MIN_PRICE <= n <= MAX_PRICE else None
+        vals = jpy_prices(v)
+        return vals[0] if vals else None
     if isinstance(v, dict):
         for k in ("amount", "value", "price", "amountJPY", "priceJpy", "priceJPY"):
             if k in v:
@@ -71,7 +79,7 @@ def parse_payload(payload, assume_sold=True):
             item_id = norm(o.get("id") or o.get("itemId") or o.get("item_id") or "")
             price = price_obj(o.get("price"))
             if item_id and price and len(samples) < 15:
-                samples.append({"id": item_id, "status": str(status), "soldOut": o.get("soldOut")})
+                samples.append({"id": item_id, "status": str(status), "soldOut": o.get("soldOut"), "price": price})
             is_sold = sold_flag or sold_status(status) or (assume_sold and item_id and price)
             if item_id and price and is_sold:
                 title = norm(o.get("name") or o.get("title") or o.get("productName") or o.get("itemName") or "")
@@ -113,17 +121,17 @@ def browser_lookup(page, query, debug=False):
     payloads, response_urls, request_urls = [], [], []
     def on_response(r):
         u = r.url
-        if "mercari" in u.lower() and ("search" in u.lower() or "/v1/api/" in u.lower()):
+        if "mercari" in u.lower() and ("search" in u.lower() or "/v1/api/" in u.lower() or "/v2/" in u.lower()):
             response_urls.append(f"{r.status()} {u}")
             try:
                 ct = r.headers.get("content-type", "")
-                if "json" in ct or "/v1/api/" in u or "entities:search" in u:
+                if "json" in ct or "/v1/api/" in u or "/v2/" in u or "entities:search" in u:
                     payloads.append(r.json())
             except Exception:
                 pass
     def on_request(r):
         u = r.url
-        if "mercari" in u.lower() and ("search" in u.lower() or "/v1/api/" in u.lower()):
+        if "mercari" in u.lower() and ("search" in u.lower() or "/v1/api/" in u.lower() or "/v2/" in u.lower()):
             request_urls.append(u)
     page.on("response", on_response)
     page.on("request", on_request)
@@ -153,7 +161,7 @@ def browser_lookup(page, query, debug=False):
                     rows.append({"url":d.get("href"), "title":text[:500], "price":prices[0], "sold":True,"price_source":"dom_jpy"})
         if debug:
             body = norm(page.locator("body").inner_text())
-            DEBUG_TEXT.write_text("URL=" + page.url + "\n" + f"PAYLOADS={len(payloads)}\nROWS={len(rows)}\nDOM={len(dom)}\nREQUEST_URLS={request_urls[-20:]}\nRESPONSE_URLS={response_urls[-20:]}\nSAMPLES={samples[:15]}\nBODY={body[:20000]}", encoding="utf-8")
+            DEBUG_TEXT.write_text("URL=" + page.url + "\n" + f"PAYLOADS={len(payloads)}\nROWS={len(rows)}\nDOM={len(dom)}\nREQUEST_URLS={request_urls[-30:]}\nRESPONSE_URLS={response_urls[-30:]}\nSAMPLES={samples[:15]}\nBODY={body[:20000]}", encoding="utf-8")
             page.screenshot(path=str(DEBUG_SCREENSHOT), full_page=False)
         prices = sorted(r["price"] for r in rows if r.get("price"))
         return {"query":query,"url":url,"count":len(prices),"prices":prices,"median":int(statistics.median(prices)) if prices else None,"robust_median":int(statistics.median(prices)) if prices else None,"low":min(prices) if prices else None,"high":max(prices) if prices else None,"items":rows,"dom_count":len(dom),"api_payloads":len(payloads),"best_similarity":max([similarity(query,r.get("title","")) for r in rows]+[0]),"price_source":rows[0].get("price_source") if rows else None,"status_samples":samples[:15],"request_urls":request_urls[-10:],"response_urls":response_urls[-10:],"sold_only_enforced":True}
