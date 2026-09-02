@@ -100,6 +100,7 @@ def discord_notify(items):
 def main():
     entries = load_watchlist()
     seen = load_state()
+    force_current = os.environ.get("FORCE_CURRENT_MATCHES", "").strip().lower() == "true"
     all_items = []
     for url in scout.SEARCH_URLS:
         print("Fetching:", url)
@@ -109,14 +110,15 @@ def main():
         except Exception as e:
             print("Fetch failed:", repr(e))
 
-    # Deduplicate by product URL and only notify for listings never seen before.
+    # Deduplicate by product URL. In one-time test mode, allow already-seen listings
+    # through so we can verify the real Jimoty -> Discord notification path.
     unique = {}
     for item in all_items:
         unique[item["url"]] = item
 
     matches = []
     for url, item in unique.items():
-        if url in seen:
+        if url in seen and not force_current:
             continue
         hits = match_watchlist(item, entries)
         if hits:
@@ -135,7 +137,9 @@ def main():
         "matches": matches[:MAX_NEW_ITEMS],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Observed: {len(unique)} / New watched matches: {len(matches)}")
+    mode = "CURRENT-TEST" if force_current else "NEW-ONLY"
+    print(f"Mode: {mode}")
+    print(f"Observed: {len(unique)} / Watched matches: {len(matches)}")
     for item in matches[:MAX_NEW_ITEMS]:
         print(f"MATCH: {item['title']} / {item['price']:,}円 / {item['url']}")
 
