@@ -60,10 +60,14 @@ def save_state(seen):
 
 def discord_notify(items):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-    if not webhook or not items:
-        if not webhook:
-            print("DISCORD_WEBHOOK_URL is not configured; notification skipped.")
+    if not webhook:
+        print("DISCORD_WEBHOOK_URL is not configured; notification skipped.")
         return False
+    if not items:
+        print("Discord: no matching items; notification skipped.")
+        return True
+
+    print(f"Discord: sending {min(len(items), MAX_NEW_ITEMS)} notification(s)...")
     ok = True
     for item in items[:MAX_NEW_ITEMS]:
         hits = ", ".join(h["name"] for h in item.get("watch_hits", [])[:4]) or "監視一致"
@@ -79,11 +83,18 @@ def discord_notify(items):
             embed["image"] = {"url": image}
         payload = json.dumps({"content": "🚨 ジモティー仕入れ候補", "embeds": [embed]}, ensure_ascii=False).encode("utf-8")
         try:
-            req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ResellScout/1.0"}, method="POST")
+            req = urllib.request.Request(
+                webhook,
+                data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "ResellScout/1.0"},
+                method="POST",
+            )
             with urllib.request.urlopen(req, timeout=15) as r:
+                body = r.read().decode("utf-8", errors="replace")
+                print(f"Discord: HTTP {r.status} for {item.get('title', 'item')}")
                 if r.status not in (200, 204):
                     ok = False
-                    print("Discord notification failed:", r.status)
+                    print("Discord notification failed:", r.status, body[:300])
         except Exception as e:
             ok = False
             print("Discord notification error:", repr(e))
@@ -134,7 +145,8 @@ def main():
     for item in matches[:MAX_NEW_ITEMS]:
         print(f"MATCH: {item['title']} / {item['price']:,}円 / {item['url']}")
 
-    discord_notify(matches)
+    if not discord_notify(matches):
+        raise RuntimeError("Discord notification failed")
 
 
 if __name__ == "__main__":
