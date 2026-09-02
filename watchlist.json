@@ -14,6 +14,7 @@
     {"name": "G-Plan", "aliases": ["G-Plan", "G Plan", "ジープラン"], "priority": "最優先"},
     {"name": "Akita Mokko", "aliases": ["Akita Mokko", "秋田木工", "秋田木工製作所"], "priority": "最優先"},
     {"name": "Kenmochi Isamu", "aliases": ["Kenmochi Isamu", "剣持勇", "剣持", "Kenmochi"], "priority": "最優先"},
+    {"name": "Stokke", "aliases": ["Stokke", "ストッケ", "Trip Trapp", "Tripp Trapp", "トリップトラップ", "トリップ トラップ"], "priority": "最優先"},
     {"name": "Louis Poulsen", "aliases": ["Louis Poulsen", "ルイスポールセン"], "priority": "高優先"},
     {"name": "Cassina", "aliases": ["Cassina", "カッシーナ"], "priority": "高優先"},
     {"name": "B&B Italia", "aliases": ["B&B Italia", "ビーアンドビーイタリア"], "priority": "高優先"},
