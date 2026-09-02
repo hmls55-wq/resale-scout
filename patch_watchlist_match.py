@@ -2,23 +2,16 @@ from pathlib import Path
 
 watch_path = Path("watch_new_listings.py")
 s = watch_path.read_text(encoding="utf-8")
-
-# Match only the listing title.
 old = '''def match_watchlist(item, entries):
     original_text = " ".join([item.get("title", ""), item.get("text", "")])
     compact_text = norm(original_text)
 '''
 new = '''def match_watchlist(item, entries):
-    # IMPORTANT: item["text"] is a wide HTML neighborhood around the card and
-    # can contain text from other listings/UI. Match watchlist terms against
-    # this listing's title only.
     original_text = str(item.get("title", ""))
     compact_text = norm(original_text)
 '''
 if old in s:
     s = s.replace(old, new, 1)
-
-# Status only from the listing title.
 old2 = '''        text = " ".join([item.get("title", ""), item.get("text", "")])
         if STATUS_RE.search(text):
 '''
@@ -28,12 +21,8 @@ new2 = '''        text = str(item.get("title", ""))
 if old2 in s:
     s = s.replace(old2, new2, 1)
 
-# Keep the runtime keyword probe enabled while validating source coverage.
 scout_path = Path("scout.py")
 sc = scout_path.read_text(encoding="utf-8")
-
-# Article anchors can wrap the whole card. Capture heading text as the actual
-# title, while preserving anchor text for card-local status/location/price.
 old3 = '''class JmtyAnchorParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True); self.items = []; self.current = None; self.in_anchor = False; self.anchor_depth = 0
@@ -96,15 +85,16 @@ new3 = '''class JmtyAnchorParser(HTMLParser):
 '''
 if old3 in sc:
     sc = sc.replace(old3, new3, 1)
-old4 = '''        title = anchor["text"] or normalize(anchor["title_attr"])
+
+# Initialize card-local text before status/price checks; do not use the wide
+# +/-3000-character neighborhood for those fields.
+old_init = '''        seen.add(url); pos = html.find(href); start = max(0, pos - 700); end = min(len(html), pos + 3000); block = html[start:end]; clean = normalize(re.sub(r"<[^>]+>", " ", block))
 '''
-new4 = '''        title = anchor.get("title") or anchor.get("heading") or normalize(anchor["title_attr"]) or anchor["text"]
-        card_text = anchor.get("text") or title
+new_init = '''        seen.add(url); pos = html.find(href); start = max(0, pos - 700); end = min(len(html), pos + 3000); block = html[start:end]; clean = normalize(re.sub(r"<[^>]+>", " ", block)); card_text = anchor.get("text") or normalize(anchor.get("title_attr"))
 '''
-if old4 in sc:
-    sc = sc.replace(old4, new4, 1)
-# Make status and price card-local instead of using the +/-3000-character
-# neighborhood, which can contain another listing's status/price.
+if old_init not in sc:
+    raise SystemExit("card init target not found")
+sc = sc.replace(old_init, new_init, 1)
 old5 = '''        if re.search(r"受付終了|掲載終了|募集終了|取引終了", clean): continue
         price = extract_price(clean)
 '''
@@ -113,11 +103,19 @@ new5 = '''        if re.search(r"受付終了|掲載終了|募集終了|取引�
         if price is None:
             price = extract_price(clean)
 '''
-if old5 in sc:
-    sc = sc.replace(old5, new5, 1)
+if old5 not in sc:
+    raise SystemExit("status/price target not found")
+sc = sc.replace(old5, new5, 1)
+old4 = '''        title = anchor["text"] or normalize(anchor["title_attr"])
+'''
+new4 = '''        title = anchor.get("title") or anchor.get("heading") or normalize(anchor.get("title_attr")) or anchor.get("text") or url.rsplit("/", 1)[-1]
+'''
+if old4 not in sc:
+    raise SystemExit("title target not found")
+sc = sc.replace(old4, new4, 1)
 scout_path.write_text(sc, encoding="utf-8")
 
-# Temporary source-coverage probe for the known missed listings.
+# Keep the temporary keyword-source probe for validation.
 if 'def probe_keyword_pages(entries):' not in s:
     probe = r'''
 
