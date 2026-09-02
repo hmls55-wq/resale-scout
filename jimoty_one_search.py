@@ -51,7 +51,6 @@ def extract_price(text):
 
 
 def extract_items(html):
-    # Jmty's keyword search pages use article-* links.
     links = re.findall(r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S)
     seen = set()
     items = []
@@ -78,7 +77,6 @@ def extract_items(html):
 
 
 def today_created(text, now):
-    # Search-result cards contain 作成M月D日 for current-year posts.
     return re.search(rf"作成\s*{now.month}月\s*{now.day}日", text) is not None
 
 
@@ -94,6 +92,25 @@ def save_state(urls):
     STATE_PATH.write_text(json.dumps({"updated_at": datetime.now(JST).isoformat(), "notified_urls": list(urls)[-5000:]}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def post_discord(webhook, payload):
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    for attempt in range(1, DISCORD_RETRIES + 1):
+        try:
+            req = urllib.request.Request(webhook, data=data, headers={"Content-Type": "application/json", "User-Agent": "ResellScout/1.0"}, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                print(f"Discord HTTP {r.status}")
+                if r.status in (200, 204):
+                    return
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait = max(float(e.headers.get("Retry-After", "2")), 2.0)
+                print(f"Discord 429; wait {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError("Discord送信失敗")
+
+
 def discord_notify(items):
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook:
@@ -101,7 +118,7 @@ def discord_notify(items):
     for i, item in enumerate(items[:MAX_NEW_ITEMS]):
         if i:
             time.sleep(1.25)
-        payload = json.dumps({
+        post_discord(webhook, {
             "content": "🚨 ジモティー新着テスト",
             "embeds": [{
                 "title": item["title"],
@@ -109,25 +126,21 @@ def discord_notify(items):
                 "description": f"検索：{SEARCH_TERM}\n価格：{item['price']:,}円\n掲載：本日\n\nジモティーの検索結果から検出",
                 "footer": {"text": "Resell Scout / Jimoty one-search test"},
             }],
-        }, ensure_ascii=False).encode("utf-8")
-        delivered = False
-        for attempt in range(1, DISCORD_RETRIES + 1):
-            try:
-                req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json", "User-Agent": "ResellScout/1.0"}, method="POST")
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    print(f"Discord HTTP {r.status}: {item['title'][:80]}")
-                    delivered = r.status in (200, 204)
-                    if delivered:
-                        break
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    wait = max(float(e.headers.get("Retry-After", "2")), 2.0)
-                    print(f"Discord 429; wait {wait}s")
-                    time.sleep(wait)
-                    continue
-                raise
-        if not delivered:
-            raise RuntimeError(f"Discord送信失敗: {item['title']}")
+        })
+
+
+def discord_diagnostic(parsed, today, new_items):
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not webhook:
+        raise RuntimeError("DISCORD_WEBHOOK_URL secret が設定されていません")
+    post_discord(webhook, {
+        "content": "🧪 ジモティー監視テスト接続OK",
+        "embeds": [{
+            "title": "カリモク検索の診断結果",
+            "description": f"検索ページ取得：OK\n取得商品数：{parsed}件\n今日判定：{today}件\nDiscord通知対象：{new_items}件\n\nこのメッセージが届けばDiscord接続は正常です。",
+            "footer": {"text": "Resell Scout / Jimoty one-search diagnostic"},
+        }],
+    })
 
 
 def main():
@@ -144,6 +157,9 @@ def main():
     state = load_state()
     new_items = [x for x in today_items if x["url"] not in state]
     print(f"New to Discord: {len(new_items)}")
+
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        discord_diagnostic(len(items), len(today_items), len(new_items))
 
     if new_items:
         discord_notify(new_items)
