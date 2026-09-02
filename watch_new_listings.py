@@ -29,7 +29,16 @@ def load_json(path, default):
 
 
 def norm(s):
-    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
+    """Compare names while ignoring harmless typography differences.
+
+    NFKC handles full-width Latin/digits and compatibility characters.
+    Removing whitespace/punctuation makes variants such as
+    'Carl Hansen', 'CarlHansen&Son', 'Tripp Trapp', and 'トリップ・トラップ'
+    comparable without needing every possible spelling in the watchlist.
+    """
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(s or "")).lower()
+    return re.sub(r"[^0-9a-zぁ-んァ-ヶ一-龯々ー]+", "", s)
 
 
 def load_watchlist():
@@ -42,9 +51,12 @@ def match_watchlist(item, entries):
     hits, seen = [], set()
     for entry in entries:
         for alias in entry.get("aliases", []):
-            a = norm(alias); name = entry.get("name", alias)
+            a = norm(alias)
+            name = entry.get("name", alias)
             if a and a in text and name not in seen:
-                hits.append({"name": name, "matched": alias, "priority": entry.get("priority", "監視")}); seen.add(name); break
+                hits.append({"name": name, "matched": alias, "priority": entry.get("priority", "監視")})
+                seen.add(name)
+                break
     return hits
 
 
@@ -122,7 +134,6 @@ def main():
             html = fetch_area_page(url)
             parsed = scout.extract_items(html)
             # カテゴリーは信用せず、50km圏内の全商品を監視対象にする。
-            # 出品者が家具以外のカテゴリーに登録していても、ブランド名・商品名で拾う。
             print(f"  parsed={len(parsed)} all-categories")
             all_items.extend(parsed)
         except Exception as e:
