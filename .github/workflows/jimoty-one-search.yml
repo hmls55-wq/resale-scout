@@ -36,7 +36,7 @@ jobs:
       - name: Run one-search monitor
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          JIMOTY_SEARCH_TERM: "カリモク"
+          JIMOTY_SEARCH_TERM: "IKEA"
         run: python jimoty_one_search.py
 
       - name: Upload state
