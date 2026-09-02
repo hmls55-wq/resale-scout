@@ -55,6 +55,7 @@ jobs:
       - name: Run new-listing watcher
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          FORCE_CURRENT_MATCHES: ${{ contains(github.event.head_commit.message, 'TEST_CURRENT_MATCHES') && 'true' || 'false' }}
         run: python watch_new_listings.py
 
       - name: Upload watcher state
