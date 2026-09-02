@@ -38,6 +38,7 @@ jobs:
       - name: Run new-listing watcher
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # [SCAN30] commit message enables a one-time 30-page verification scan.
           SCAN_PAGES: ${{ github.event_name == 'workflow_dispatch' && '30' || (github.event_name == 'push' && contains(github.event.head_commit.message, '[SCAN30]')) && '30' || '5' }}
         run: python watch_new_listings.py
 
