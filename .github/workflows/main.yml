@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "17 * * * *"
+    - cron: "*/5 * * * *"
 
 concurrency:
   group: resell-scout-${{ github.ref }}
@@ -14,78 +14,44 @@ concurrency:
 jobs:
   scout:
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install browser automation
+      - name: Restore previous watcher state
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python -m pip install --upgrade pip
-          pip install playwright
-          python -m playwright install --with-deps chromium
+          set -e
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=resell-scout-state&per_page=1"
+          URL=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$API" | jq -r '.artifacts[0].archive_download_url // empty')
+          if [ -n "$URL" ]; then
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$URL" -o state.zip || true
+            unzip -o state.zip -d . 2>/dev/null || true
+          fi
+          test -f watch_state.json || echo '{"seen_urls":[]}' > watch_state.json
 
-      - name: Run Resell Scout
-        run: python scout.py
+      - name: Run new-listing watcher
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python watch_new_listings.py
 
-      - name: Scan additional resale categories
-        if: success()
-        run: python scout_extra.py
-
-      - name: Enrich Jimoty candidates
-        if: success()
-        run: python enrich_jmty.py
-
-      - name: Normalize market query titles
-        if: success()
-        run: python prepare_market_candidates.py
-
-      - name: Check Mercari sold-market prices
-        if: success()
-        run: python mercari_market.py
-
-      - name: Improve Mercari title matching
-        if: success()
-        run: python improve_market_similarity.py
-
-      - name: Calculate net resale profit
-        if: success()
-        run: python calculate_profit.py
-
-      - name: Rank resale opportunities
-        if: success()
-        run: python rank_opportunities.py
-
-      - name: Build Mercari verification report
-        if: always()
-        run: python build_verification_report.py
-
-      - name: Show generated reports
-        if: always()
-        run: |
-          echo "=== generated files ==="
-          ls -lah resell_report.md resell_candidates.json verification_report.md mercari_market.json profit_report.md profit_candidates.json opportunity_report.md opportunity_candidates.json mercari_debug.* 2>/dev/null || true
-
-      - name: Upload scout report
+      - name: Upload watcher state
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: resell-scout-report
-          path: |
-            resell_report.md
-            resell_candidates.json
-            verification_report.md
-            mercari_market.json
-            profit_report.md
-            profit_candidates.json
-            opportunity_report.md
-            opportunity_candidates.json
-            mercari_debug.txt
-            mercari_debug.png
-          if-no-files-found: warn
+          name: resell-scout-state
+          path: watch_state.json
+          retention-days: 7
+
+      - name: Upload new matches
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resell-scout-new-matches
+          path: new_matches.json
           retention-days: 7
