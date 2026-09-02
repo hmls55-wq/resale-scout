@@ -85,9 +85,6 @@ new3 = '''class JmtyAnchorParser(HTMLParser):
 '''
 if old3 in sc:
     sc = sc.replace(old3, new3, 1)
-
-# Initialize card-local text before status/price checks; do not use the wide
-# +/-3000-character neighborhood for those fields.
 old_init = '''        seen.add(url); pos = html.find(href); start = max(0, pos - 700); end = min(len(html), pos + 3000); block = html[start:end]; clean = normalize(re.sub(r"<[^>]+>", " ", block))
 '''
 new_init = '''        seen.add(url); pos = html.find(href); start = max(0, pos - 700); end = min(len(html), pos + 3000); block = html[start:end]; clean = normalize(re.sub(r"<[^>]+>", " ", block)); card_text = anchor.get("text") or normalize(anchor.get("title_attr"))
@@ -115,12 +112,15 @@ if old4 not in sc:
 sc = sc.replace(old4, new4, 1)
 scout_path.write_text(sc, encoding="utf-8")
 
-# Keep the temporary keyword-source probe for validation.
+# Temporary keyword-source probe. Keyword result pages contain historical
+# results, so only accept listings whose displayed date is within 7 days.
 if 'def probe_keyword_pages(entries):' not in s:
     probe = r'''
 
 def probe_keyword_pages(entries):
-    probe_terms = ["カールハンセン", "CarlHansen", "Panton Chair", "パントンチェア"]
+    probe_terms = ["カールハンセン", "パントンチェア"]
+    today = datetime.date.today()
+    cutoff = today - datetime.timedelta(days=7)
     out = []
     for term in probe_terms:
         slug = urllib.parse.quote(term, safe="")
@@ -137,12 +137,21 @@ def probe_keyword_pages(entries):
                 title = str(item.get("title", ""))
                 if STATUS_RE.search(title):
                     continue
+                m = re.search(r"(\d{1,2})月(\d{1,2})日", title)
+                if not m:
+                    print("  SKIP keyword match without date:", title[:100])
+                    continue
+                md = datetime.date(today.year, int(m.group(1)), int(m.group(2)))
+                if md > today:
+                    md = datetime.date(today.year - 1, int(m.group(1)), int(m.group(2)))
+                if md < cutoff:
+                    continue
                 item["watch_hits"] = hits
                 item["location"] = detect_location(item.get("text", ""))
                 item["distance_km"] = 100
                 item["keyword_probe"] = term
                 out.append(item)
-                print(f"  KEYWORD MATCH: {title[:120]} / {item.get('price', 0):,}円 / {item.get('url')}")
+                print(f"  KEYWORD RECENT MATCH: {title[:120]} / {item.get('price', 0):,}円 / {item.get('url')}")
         except Exception as e:
             print("Keyword probe failed:", repr(e))
     return out
@@ -163,4 +172,4 @@ replacement = '''            print("Fetch failed:", repr(e))
 if needle in s:
     s = s.replace(needle, replacement, 1)
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: title-only matching, card-local status/price, keyword probe")
+print("Patched watcher: title-only matching, card-local status/price, recent keyword probe")
