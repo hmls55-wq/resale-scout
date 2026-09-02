@@ -38,6 +38,7 @@ jobs:
       - name: Run new-listing watcher
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SCAN_PAGES: ${{ github.event_name == 'workflow_dispatch' && '30' || '5' }}
         run: python watch_new_listings.py
 
       - name: Upload watcher state
