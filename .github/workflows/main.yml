@@ -2,6 +2,12 @@ name: Resell Scout
 
 on:
   workflow_dispatch:
+    inputs:
+      test_notification:
+        description: "Discord通知テストを送る"
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
   schedule:
@@ -34,6 +40,17 @@ jobs:
             unzip -o state.zip -d . 2>/dev/null || true
           fi
           test -f watch_state.json || echo '{"seen_urls":[]}' > watch_state.json
+
+      - name: Test Discord notification
+        if: github.event_name == 'workflow_dispatch' && inputs.test_notification == true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          test -n "$DISCORD_WEBHOOK_URL"
+          curl -fsS -X POST \
+            -H 'Content-Type: application/json' \
+            --data '{"content":"🧪 Resell Scout Discord通知テスト成功！このチャンネルで新着通知を受け取れます。"}' \
+            "$DISCORD_WEBHOOK_URL"
 
       - name: Run new-listing watcher
         env:
