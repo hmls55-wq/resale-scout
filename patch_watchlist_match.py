@@ -115,8 +115,6 @@ def probe_keyword_pages(entries):
     """Probe Jimoty keyword pages and keep only recent, active, clean cards."""
     probe_terms = ["カールハンセン", "パントンチェア"]
     today = datetime.now().date()
-    # The target is today's and yesterday's postings; older results are not
-    # useful for a 5-minute new-listing watcher.
     cutoff = today - __import__("datetime").timedelta(days=1)
     out = []
     for term in probe_terms:
@@ -129,8 +127,6 @@ def probe_keyword_pages(entries):
             parser.feed(html)
             print(f"  商品リンク候補: {len(parser.items)}")
 
-            # The same article can appear through several anchors. Keep one
-            # clean candidate per URL before matching or extracting metadata.
             candidates = {}
             for anchor in parser.items:
                 href = anchor.get("href", "")
@@ -139,6 +135,9 @@ def probe_keyword_pages(entries):
                 if not item_url:
                     continue
                 title = anchor.get("title") or anchor.get("heading") or normalize(anchor.get("title_attr")) or anchor.get("text") or ""
+                # Strip Jimoty's UI text that sometimes sits inside the same
+                # anchor after the actual listing title.
+                title = re.split(r"お気に入りに登録しました|お気に入り一覧|ログインが必要です", title)[0].strip()
                 if not title:
                     continue
                 hits = match_watchlist({"title": title}, entries)
@@ -156,8 +155,6 @@ def probe_keyword_pages(entries):
                 if old is None or score > old[0]:
                     candidates[item_url] = (score, anchor, title, hits, href)
 
-            # Use ALL article anchors to delimit cards. Using only watchlist
-            # anchors lets an unrelated previous card leak its status/date.
             all_positions = []
             for anchor in parser.items:
                 href = anchor.get("href", "")
@@ -165,7 +162,6 @@ def probe_keyword_pages(entries):
                 if p >= 0:
                     all_positions.append((p, href))
             all_positions.sort()
-
             first_pos_by_href = {}
             for p, href in all_positions:
                 first_pos_by_href.setdefault(href, p)
@@ -184,8 +180,6 @@ def probe_keyword_pages(entries):
                     print(f"  KEYWORD ENDED SKIP: {title[:120]}")
                     continue
 
-                # Date and price come from the title first so neighboring cards
-                # cannot leak an older date or another item's 0円 price.
                 date_match = re.search(r"(\d{1,2})月(\d{1,2})日", title)
                 if not date_match:
                     date_match = re.search(r"(\d{1,2})月(\d{1,2})日", local_text)
@@ -244,4 +238,4 @@ if needle in s:
     s = s.replace(needle, replacement, 1)
 
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: title-only matching, card-local status, 2-day keyword probe, deduped URLs")
+print("Patched watcher: clean keyword titles, title-only matching, card-local status, 2-day probe")
