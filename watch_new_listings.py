@@ -91,7 +91,7 @@ def discord_notify(items):
         priority = "🔥" if any(h.get("priority") == "最優先" for h in item.get("watch_hits", [])) else "🟡"
         image = (item.get("image_urls") or [None])[0]
         location = item.get("location") or "場所は商品ページで確認"
-        embed = {"title": f"{priority} {item.get('title', 'ジモティー商品')[:240]}", "url": item.get("url"), "description": f"監視一致：{hits}\n価格：{item.get('price', 0):,}円\n場所：{location}\n検索条件：{AREA_LABEL}\n\nジモティーの距離検索結果から家具だけ抽出 / 終了済み除外", "footer": {"text": "Resell Scout"}}
+        embed = {"title": f"{priority} {item.get('title', 'ジモティー商品')[:240]}", "url": item.get("url"), "description": f"監視一致：{hits}\n価格：{item.get('price', 0):,}円\n場所：{location}\n検索条件：{AREA_LABEL}\n\nジモティーの距離検索結果から全カテゴリーを監視 / 終了済み除外", "footer": {"text": "Resell Scout"}}
         if image: embed["image"] = {"url": image}
         payload = json.dumps({"content": "🚨 ジモティー仕入れ候補", "embeds": [embed]}, ensure_ascii=False).encode("utf-8")
         delivered = False
@@ -121,9 +121,10 @@ def main():
         try:
             html = fetch_area_page(url)
             parsed = scout.extract_items(html)
-            furniture = [x for x in parsed if "/sale-fur/article-" in x.get("url", "")]
-            print(f"  parsed={len(parsed)} furniture={len(furniture)}")
-            all_items.extend(furniture)
+            # カテゴリーは信用せず、50km圏内の全商品を監視対象にする。
+            # 出品者が家具以外のカテゴリーに登録していても、ブランド名・商品名で拾う。
+            print(f"  parsed={len(parsed)} all-categories")
+            all_items.extend(parsed)
         except Exception as e:
             print("Fetch failed:", repr(e))
     unique = {item["url"]: item for item in all_items}; matches = []; ended_excluded = 0
@@ -136,8 +137,8 @@ def main():
             item["watch_hits"] = hits; item["location"] = detect_location(text); item["distance_km"] = 50; matches.append(item)
     seen.update(unique.keys()); save_state(seen)
     matches.sort(key=lambda x: (0 if any(h.get("priority") == "最優先" for h in x.get("watch_hits", [])) else 1, x.get("price", 0)))
-    Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": f"AREA-PORTAL-50KM-P{SCAN_PAGES}", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Mode: AREA-PORTAL-50KM-P{SCAN_PAGES}"); print(f"Observed furniture: {len(unique)} / 終了済み除外: {ended_excluded} / Watched matches: {len(matches)}")
+    Path("new_matches.json").write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"), "mode": f"AREA-PORTAL-50KM-ALL-P{SCAN_PAGES}", "count": len(matches), "matches": matches[:MAX_NEW_ITEMS]}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Mode: AREA-PORTAL-50KM-ALL-P{SCAN_PAGES}"); print(f"Observed all categories: {len(unique)} / 終了済み除外: {ended_excluded} / Watched matches: {len(matches)}")
     for item in matches[:MAX_NEW_ITEMS]: print(f"MATCH: {item['title']} / {item['price']:,}円 / {item.get('location') or '場所は商品ページで確認'} / 中村区から50km圏内 / {item['url']}")
     if not discord_notify(matches): raise RuntimeError("Discord notification failed")
 
