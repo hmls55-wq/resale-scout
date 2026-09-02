@@ -115,7 +115,9 @@ def probe_keyword_pages(entries):
     """Probe Jimoty keyword pages and keep only recent, active, clean cards."""
     probe_terms = ["カールハンセン", "パントンチェア"]
     today = datetime.now().date()
-    cutoff = today - __import__("datetime").timedelta(days=7)
+    # The target is today's and yesterday's postings; older results are not
+    # useful for a 5-minute new-listing watcher.
+    cutoff = today - __import__("datetime").timedelta(days=1)
     out = []
     for term in probe_terms:
         slug = urllib.parse.quote(term, safe="")
@@ -142,7 +144,6 @@ def probe_keyword_pages(entries):
                 hits = match_watchlist({"title": title}, entries)
                 if not hits:
                     continue
-                # Prefer a title containing both the posting date and price.
                 score = 0
                 if re.search(r"\d{1,2}月\d{1,2}日", title):
                     score += 4
@@ -155,34 +156,36 @@ def probe_keyword_pages(entries):
                 if old is None or score > old[0]:
                     candidates[item_url] = (score, anchor, title, hits, href)
 
-            # Determine each card's local HTML window using neighboring article
-            # anchors, rather than a huge fixed window that can steal data from
-            # the next/previous listing.
-            positions = []
-            for href in {v[4] for v in candidates.values()}:
+            # Use ALL article anchors to delimit cards. Using only watchlist
+            # anchors lets an unrelated previous card leak its status/date.
+            all_positions = []
+            for anchor in parser.items:
+                href = anchor.get("href", "")
                 p = html.find(href)
                 if p >= 0:
-                    positions.append((p, href))
-            positions.sort()
-            pos_by_href = {href: p for p, href in positions}
+                    all_positions.append((p, href))
+            all_positions.sort()
+
+            first_pos_by_href = {}
+            for p, href in all_positions:
+                first_pos_by_href.setdefault(href, p)
 
             for item_url, (_score, anchor, title, hits, href) in candidates.items():
-                pos = pos_by_href.get(href, html.find(href))
+                pos = first_pos_by_href.get(href, html.find(href))
                 if pos < 0:
                     continue
-                prev_positions = [p for p, _ in positions if p < pos]
+                prev_positions = [p for p, _ in all_positions if p < pos]
                 start = prev_positions[-1] if prev_positions else max(0, pos - 1000)
-                local_block = html[start:min(len(html), pos + 500)]
+                local_block = html[start:min(len(html), pos + 700)]
                 local_text = re.sub(r"<[^>]+>", " ", local_block)
                 local_text = re.sub(r"\s+", " ", local_text).strip()
 
-                # Status is card-local; do not use the broad page text.
                 if STATUS_RE.search(title) or STATUS_RE.search(local_text):
                     print(f"  KEYWORD ENDED SKIP: {title[:120]}")
                     continue
 
-                # Date and price must come from the listing title first. This
-                # prevents an adjacent card's 8/11 date or 0円 from leaking in.
+                # Date and price come from the title first so neighboring cards
+                # cannot leak an older date or another item's 0円 price.
                 date_match = re.search(r"(\d{1,2})月(\d{1,2})日", title)
                 if not date_match:
                     date_match = re.search(r"(\d{1,2})月(\d{1,2})日", local_text)
@@ -223,7 +226,6 @@ def probe_keyword_pages(entries):
             print("Keyword probe failed:", repr(e))
     return out
 '''
-# Replace any previously injected probe so the runtime patch remains idempotent.
 start = s.find("\ndef probe_keyword_pages(entries):")
 if start >= 0:
     end = s.find("\ndef main():", start)
@@ -242,4 +244,4 @@ if needle in s:
     s = s.replace(needle, replacement, 1)
 
 watch_path.write_text(s, encoding="utf-8")
-print("Patched watcher: title-only matching, card-local status/price, deduped recent keyword probe")
+print("Patched watcher: title-only matching, card-local status, 2-day keyword probe, deduped URLs")
