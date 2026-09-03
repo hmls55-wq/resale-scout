@@ -34,7 +34,7 @@ jobs:
             curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$URL" -o state.zip || true
             unzip -o state.zip -d . 2>/dev/null || true
           fi
-          test -f jimoty_db.json || echo '{"initialized":false,"seen_urls":[],"items":{}}' > jimoty_db.json
+          test -f jimoty_db.json || echo '{"initialized":false,"seen_urls":[],"items":{},"pending_items":{}}' > jimoty_db.json
 
       - name: Run Jimoty global scan
         env:
@@ -43,8 +43,10 @@ jobs:
           JIMOTY_RULES_PATH: notification_rules.json
           JIMOTY_RESULT_PATH: jimoty_monitor_result.json
           JIMOTY_MAX_PAGES: 1
-          JIMOTY_DETAIL_FETCH_LIMIT: 20
-          JIMOTY_DETAIL_FETCH_WORKERS: 20
+          # Normal runs should only have a few new posts. If there is a burst,
+          # pending_items carries the rest safely into the next 5-minute run.
+          JIMOTY_DETAIL_FETCH_LIMIT: 10
+          JIMOTY_DETAIL_FETCH_WORKERS: 5
           JIMOTY_HTTP_TIMEOUT: 8
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
