@@ -19,7 +19,7 @@ DISCORD_RETRIES = 4
 MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "1"))
 MAX_ITEMS_PER_PAGE = 50
 DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "50"))
-DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "20"))
+DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "50"))
 BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
@@ -35,7 +35,7 @@ def fetch(url):
         "Cache-Control": "no-cache",
         "Referer": "https://jmty.jp/",
     })
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=6) as r:
         body = r.read().decode("utf-8", errors="ignore")
         print(f"HTTP {r.status}, HTML {len(body):,} bytes")
         if len(body) < 5_000:
@@ -191,7 +191,7 @@ def post_discord(webhook, item, matches):
                 "Content-Type": "application/json",
                 "User-Agent": "ResellScout/2.0",
             }, method="POST")
-            with urllib.request.urlopen(req, timeout=15) as r:
+            with urllib.request.urlopen(req, timeout=6) as r:
                 print(f"Discord HTTP {r.status}")
                 if r.status in (200, 204):
                     return
