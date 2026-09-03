@@ -18,8 +18,9 @@ RESULT_PATH = Path(os.environ.get("JIMOTY_RESULT_PATH", "jimoty_monitor_result.j
 DISCORD_RETRIES = 4
 MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "1"))
 MAX_ITEMS_PER_PAGE = 50
-DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "50"))
-DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "50"))
+DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "20"))
+DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "20"))
+HTTP_TIMEOUT = int(os.environ.get("JIMOTY_HTTP_TIMEOUT", "8"))
 BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
@@ -34,13 +35,20 @@ def fetch(url):
         "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
         "Cache-Control": "no-cache",
         "Referer": "https://jmty.jp/",
+        "Connection": "close",
     })
-    with urllib.request.urlopen(req, timeout=6) as r:
-        body = r.read().decode("utf-8", errors="ignore")
-        print(f"HTTP {r.status}, HTML {len(body):,} bytes")
-        if len(body) < 5_000:
-            raise RuntimeError(f"HTMLが短すぎます: {len(body)} bytes")
-        return body
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            body = r.read().decode("utf-8", errors="ignore")
+            elapsed = time.monotonic() - started
+            print(f"HTTP {r.status}, HTML {len(body):,} bytes, {elapsed:.2f}s")
+            if len(body) < 5_000:
+                raise RuntimeError(f"HTMLが短すぎます: {len(body)} bytes")
+            return body
+    except Exception as e:
+        print(f"HTTP failed after {time.monotonic() - started:.2f}s: {url} :: {e}")
+        raise
 
 
 def clean(text):
@@ -88,12 +96,7 @@ def extract_items(page_html):
         price = extract_price(card_text)
         if not title:
             continue
-        items.append({
-            "title": title[:200],
-            "price": price,
-            "url": url,
-            "description": card_text[:8000],
-        })
+        items.append({"title": title[:200], "price": price, "url": url, "description": card_text[:8000]})
         if len(items) >= MAX_ITEMS_PER_PAGE:
             break
     return items
@@ -176,22 +179,12 @@ def post_discord(webhook, item, matches):
     if len(desc) > 900:
         desc = desc[:900] + "…"
     price_line = f"価格：{item.get('price'):,}円" if isinstance(item.get("price"), int) else "価格：不明"
-    payload = {
-        "content": "🚨 ジモティー新着・通知条件一致",
-        "embeds": [{
-            "title": item["title"],
-            "url": item["url"],
-            "description": f"通知条件：{matched}\n{price_line}\n\n商品説明：\n{desc}\n\nResell Scout / Jimoty"
-        }],
-    }
+    payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\n{price_line}\n\n商品説明：\n{desc}\n\nResell Scout / Jimoty"}]}
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     for attempt in range(1, DISCORD_RETRIES + 1):
         try:
-            req = urllib.request.Request(webhook, data=data, headers={
-                "Content-Type": "application/json",
-                "User-Agent": "ResellScout/2.0",
-            }, method="POST")
-            with urllib.request.urlopen(req, timeout=6) as r:
+            req = urllib.request.Request(webhook, data=data, headers={"Content-Type": "application/json", "User-Agent": "ResellScout/2.0"}, method="POST")
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
                 print(f"Discord HTTP {r.status}")
                 if r.status in (200, 204):
                     return
@@ -206,6 +199,7 @@ def post_discord(webhook, item, matches):
 
 
 def main():
+    overall_started = time.monotonic()
     now = datetime.now(JST)
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if not webhook:
@@ -247,7 +241,7 @@ def main():
         state["last_new_count"] = 0
         save_state(state)
         print(f"Database initialized with {len(page_seen_urls)} URLs; no notifications.")
-        RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": 0, "notified": 0}, ensure_ascii=False, indent=2), encoding="utf-8")
+        RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": 0, "notified": 0, "elapsed_seconds": round(time.monotonic() - overall_started, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
         return
 
     new_items = [item for item in all_items if item["url"] not in seen]
@@ -256,25 +250,23 @@ def main():
     notified = []
     db_items = state.get("items", {})
     detail_items = new_items[:DETAIL_FETCH_LIMIT]
-
+    detail_started = time.monotonic()
     if detail_items:
         workers = max(1, min(DETAIL_FETCH_WORKERS, len(detail_items)))
         print(f"Fetching {len(detail_items)} detail pages with {workers} workers")
-        started = time.monotonic()
         with ThreadPoolExecutor(max_workers=workers) as executor:
             detailed_items = list(executor.map(fetch_detail, detail_items))
-        print(f"DETAIL FETCH SECONDS: {time.monotonic() - started:.2f}")
     else:
         detailed_items = []
+    print(f"DETAIL FETCH SECONDS: {time.monotonic() - detail_started:.2f}")
 
     for item in detailed_items:
         matches = match_rules(item, rules)
         print(f"MATCH CHECK: title={item['title']!r} matches={[m['keyword'] for m in matches]}")
         db_items[item["url"]] = item
-        if not matches:
-            continue
-        post_discord(webhook, item, matches)
-        notified.append({"url": item["url"], "title": item["title"], "matches": matches})
+        if matches:
+            post_discord(webhook, item, matches)
+            notified.append({"url": item["url"], "title": item["title"], "matches": matches})
 
     for item in new_items[DETAIL_FETCH_LIMIT:]:
         db_items[item["url"]] = item
@@ -287,15 +279,9 @@ def main():
     state["last_notified_count"] = len(notified)
     save_state(state)
 
-    RESULT_PATH.write_text(json.dumps({
-        "checked_at": now.isoformat(),
-        "initialized": True,
-        "collected": len(all_items),
-        "new": len(new_items),
-        "notified": len(notified),
-        "notifications": notified,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Done. New={len(new_items)}, notified={len(notified)}")
+    elapsed = time.monotonic() - overall_started
+    RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": len(new_items), "notified": len(notified), "notifications": notified, "elapsed_seconds": round(elapsed, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Done. New={len(new_items)}, notified={len(notified)}, elapsed={elapsed:.2f}s")
 
 
 if __name__ == "__main__":
