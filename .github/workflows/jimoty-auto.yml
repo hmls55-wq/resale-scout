@@ -3,8 +3,7 @@ name: Jimoty Auto Monitor
 on:
   workflow_dispatch:
   schedule:
-    # GitHub schedule is only a launcher. Each job checks every 5 minutes
-    # for about 53 minutes, which is much more resilient to schedule delays.
+    # GitHub schedule is only a launcher. One run performs an actual 5-minute loop.
     - cron: "7 * * * *"
       timezone: "Asia/Tokyo"
 
@@ -13,210 +12,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  search:
-    strategy:
-      fail-fast: false
-      max-parallel: 100
-      matrix:
-        include:
-          - key: ikea
-            search_term: IKEA
-          - key: ikea_jp
-            search_term: イケア
-          - key: ikea_alt
-            search_term: イケヤ
-          - key: muji
-            search_term: 無印良品
-          - key: muji_en
-            search_term: MUJI
-          - key: karimoku60
-            search_term: カリモク60
-          - key: karimoku60_en
-            search_term: karimoku60
-          - key: karimoku60_furniture
-            search_term: カリモク60家具
-          - key: maruni
-            search_term: マルニ木工
-          - key: maruni_en
-            search_term: maruni
-          - key: maruni60
-            search_term: マルニ60
-          - key: maruni60_en
-            search_term: maruni60
-          - key: hida
-            search_term: 飛騨産業
-          - key: hida_en
-            search_term: HIDA
-          - key: kitsutsuki
-            search_term: キツツキ
-          - key: kitsutsuki_mark
-            search_term: キツツキマーク
-          - key: kashiwa
-            search_term: 柏木工
-          - key: tendo
-            search_term: 天童木工
-          - key: akita_mokko
-            search_term: 秋田木工
-          - key: miyazaki_chair
-            search_term: 宮崎椅子製作所
-          - key: crash_gate
-            search_term: クラッシュゲート
-          - key: crash_gate_en
-            search_term: CRASH GATE
-          - key: actus_jp
-            search_term: アクタス
-          - key: actus_en
-            search_term: ACTUS
-          - key: js_furniture_jp
-            search_term: ジャーナルスタンダードファニチャー
-          - key: acme
-            search_term: ACME Furniture
-          - key: truck
-            search_term: TRUCK FURNITURE
-          - key: idee
-            search_term: IDEE
-          - key: idee_jp
-            search_term: イデー
-          - key: hay_japan
-            search_term: HAY JAPAN
-          - key: hay
-            search_term: HAY
-          - key: hay_jp
-            search_term: ヘイ
-          - key: pfs
-            search_term: PACIFIC FURNITURE SERVICE
-          - key: boconcept
-            search_term: BoConcept
-          - key: boconcept_jp
-            search_term: ボーコンセプト
-          - key: cassina
-            search_term: Cassina
-          - key: cassina_jp
-            search_term: カッシーナ
-          - key: cassina_ixc
-            search_term: Cassina ixc.
-          - key: bb_italia
-            search_term: B&B Italia
-          - key: molteni
-            search_term: Molteni&C
-          - key: minotti
-            search_term: Minotti
-          - key: minotti_jp
-            search_term: ミノッティ
-          - key: fritz_hansen
-            search_term: Fritz Hansen
-          - key: fritz_hansen_jp
-            search_term: フリッツ・ハンセン
-          - key: artek
-            search_term: Artek
-          - key: artek_jp
-            search_term: アルテック
-          - key: vitra
-            search_term: Vitra
-          - key: vitra_jp
-            search_term: ヴィトラ
-          - key: usm_haller_jp
-            search_term: USMハラー
-          - key: usm_haller
-            search_term: USM Haller
-          - key: knoll
-            search_term: Knoll
-          - key: knoll_jp
-            search_term: ノール
-          - key: magis
-            search_term: Magis
-          - key: magis_jp
-            search_term: マジス
-          - key: kartell
-            search_term: Kartell
-          - key: kartell_jp
-            search_term: カルテル
-          - key: ligne_roset
-            search_term: Ligne Roset
-          - key: ligne_roset_jp
-            search_term: リーン・ロゼ
-          - key: herman_miller
-            search_term: Herman Miller
-          - key: herman_miller_jp
-            search_term: ハーマンミラー
-          - key: eames
-            search_term: Eames
-          - key: eames_jp
-            search_term: イームズ
-          - key: george_nelson
-            search_term: George Nelson
-          - key: george_nelson_jp
-            search_term: ジョージ・ネルソン
-          - key: hans_wegner
-            search_term: Hans Wegner
-          - key: hans_wegner_jp
-            search_term: ハンス・ウェグナー
-          - key: finn_juhl
-            search_term: Finn Juhl
-          - key: finn_juhl_jp
-            search_term: フィン・ユール
-          - key: gplan
-            search_term: G-PLAN
-          - key: gplan_jp
-            search_term: Gプラン
-          - key: ercol
-            search_term: Ercol
-          - key: ercol_jp
-            search_term: アーコール
-          - key: mcintosh
-            search_term: McIntosh
-          - key: mcintosh_jp
-            search_term: マッキントッシュ
-          - key: nathan
-            search_term: Nathan
-          - key: nathan_jp
-            search_term: ネイサン
-          - key: kai_kristiansen
-            search_term: Kai Kristiansen
-          - key: kai_kristiansen_jp
-            search_term: カイ・クリスチャンセン
-          - key: poul_cadovius
-            search_term: Poul Cadovius
-          - key: poul_cadovius_jp
-            search_term: ポール・カドヴィウス
-          - key: borge_mogensen_jp
-            search_term: ボーエ・モーエンセン
-          - key: alvar_aalto_jp
-            search_term: アルヴァ・アアルト
-          - key: ilmari_tapiovaara_jp
-            search_term: イルマリ・タピオヴァーラ
-          - key: louis_poulsen
-            search_term: Louis Poulsen
-          - key: louis_poulsen_jp
-            search_term: ルイスポールセン
-          - key: flos
-            search_term: Flos
-          - key: flos_upper
-            search_term: FLOS
-          - key: artemide
-            search_term: Artemide
-          - key: artemide_jp
-            search_term: アルテミデ
-          - key: foscarini
-            search_term: Foscarini
-          - key: foscarini_jp
-            search_term: フォスカリーニ
-          - key: le_klint
-            search_term: Le Klint
-          - key: le_klint_jp
-            search_term: レ・クリント
-          - key: yamagiwa
-            search_term: ヤマギワ
-          - key: isamu_noguchi_jp
-            search_term: イサム・ノグチ
-          - key: akari
-            search_term: AKARI
-          - key: art_work_studio
-            search_term: ART WORK STUDIO
-          - key: art_work_studio_jp
-            search_term: アートワークスタジオ
-          - key: balumuda
-            search_term: バルミューダ
+  monitor:
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
@@ -227,50 +23,55 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Restore previous state
+      - name: Restore Jimoty database
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          ARTIFACT_NAME="jimoty-state-${{ matrix.key }}"
+          ARTIFACT_NAME="jimoty-global-db"
           API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1"
           URL=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$API" | jq -r '.artifacts[0].archive_download_url // empty')
           if [ -n "$URL" ]; then
             curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$URL" -o state.zip || true
             unzip -o state.zip -d . 2>/dev/null || true
           fi
-          test -f "state_${{ matrix.key }}.json" || echo '{"notified_urls":[]}' > "state_${{ matrix.key }}.json"
+          test -f jimoty_db.json || echo '{"initialized":false,"seen_urls":[],"items":{}}' > jimoty_db.json
 
-      - name: Run search repeatedly
+      - name: Run Jimoty collector every 5 minutes
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          JIMOTY_SEARCH_TERM: ${{ matrix.search_term }}
-          JIMOTY_STATE_PATH: state_${{ matrix.key }}.json
-          JIMOTY_RESULT_PATH: result_${{ matrix.key }}.json
+          JIMOTY_STATE_PATH: jimoty_db.json
+          JIMOTY_RULES_PATH: notification_rules.json
+          JIMOTY_RESULT_PATH: jimoty_monitor_result.json
+          JIMOTY_MAX_PAGES: 10
+          JIMOTY_DETAIL_FETCH_LIMIT: 100
+          JIMOTY_DISTANCE_KM: 50
+          JIMOTY_CENTER_LAT: 35.1681
+          JIMOTY_CENTER_LNG: 136.8734
         run: |
           set -u
           for i in $(seq 1 11); do
-            echo "===== Jimoty check ${i}/11: ${JIMOTY_SEARCH_TERM} at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
-            if ! python jimoty_one_search.py; then
-              echo "Jimoty check ${i} failed for ${JIMOTY_SEARCH_TERM}; continuing to the next check."
+            echo "===== Jimoty global check ${i}/11 at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
+            if ! python jimoty_monitor.py; then
+              echo "Jimoty global check ${i} failed; continuing to the next check."
             fi
             if [ "$i" -lt 11 ]; then
               sleep 290
             fi
           done
 
-      - name: Upload state
+      - name: Upload Jimoty database
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jimoty-state-${{ matrix.key }}
-          path: state_${{ matrix.key }}.json
+          name: jimoty-global-db
+          path: jimoty_db.json
           retention-days: 7
 
-      - name: Upload result
+      - name: Upload latest result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jimoty-result-${{ matrix.key }}
-          path: result_${{ matrix.key }}.json
+          name: jimoty-global-result
+          path: jimoty_monitor_result.json
           retention-days: 7
