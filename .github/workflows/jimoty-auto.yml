@@ -17,12 +17,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        search_term:
-          - IKEA
-          - ニトリ
-          - 無印良品
-          - カリモク
-          - アンティーク家具
+        include:
+          - key: ikea
+            search_term: IKEA
+          - key: nitori
+            search_term: ニトリ
+          - key: muji
+            search_term: 無印良品
+          - key: karimoku
+            search_term: カリモク
+          - key: antique
+            search_term: アンティーク家具
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
@@ -38,23 +43,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TERM="${{ matrix.search_term }}"
-          SAFE_TERM=$(printf '%s' "$TERM" | sha256sum | cut -d' ' -f1)
-          ARTIFACT_NAME="jimoty-state-${SAFE_TERM}"
+          ARTIFACT_NAME="jimoty-state-${{ matrix.key }}"
           API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1"
           URL=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$API" | jq -r '.artifacts[0].archive_download_url // empty')
           if [ -n "$URL" ]; then
             curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$URL" -o state.zip || true
             unzip -o state.zip -d . 2>/dev/null || true
           fi
-          test -f "state_${SAFE_TERM}.json" || echo '{"notified_urls":[]}' > "state_${SAFE_TERM}.json"
+          test -f "state_${{ matrix.key }}.json" || echo '{"notified_urls":[]}' > "state_${{ matrix.key }}.json"
 
       - name: Run search repeatedly
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           JIMOTY_SEARCH_TERM: ${{ matrix.search_term }}
-          JIMOTY_STATE_PATH: state_${{ matrix.search_term }}.json
-          JIMOTY_RESULT_PATH: result_${{ matrix.search_term }}.json
+          JIMOTY_STATE_PATH: state_${{ matrix.key }}.json
+          JIMOTY_RESULT_PATH: result_${{ matrix.key }}.json
         run: |
           set -u
           for i in $(seq 1 11); do
@@ -71,14 +74,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jimoty-state-${{ hashFiles(format('state_{0}.json', matrix.search_term)) }}
-          path: state_${{ matrix.search_term }}.json
+          name: jimoty-state-${{ matrix.key }}
+          path: state_${{ matrix.key }}.json
           retention-days: 7
 
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jimoty-result-${{ matrix.search_term }}
-          path: result_${{ matrix.search_term }}.json
+          name: jimoty-result-${{ matrix.key }}
+          path: result_${{ matrix.key }}.json
           retention-days: 7
