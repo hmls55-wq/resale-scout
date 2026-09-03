@@ -220,7 +220,9 @@ def main():
     for page in range(1, MAX_PAGES + 1):
         url = page_url(page)
         print(f"===== collect page {page}/{MAX_PAGES}: {url} =====")
+        started = time.monotonic()
         html = fetch(url)
+        print(f"LIST FETCH SECONDS: {time.monotonic() - started:.2f}")
         items = extract_items(html)
         print(f"Parsed page {page}: {len(items)}")
         if not items:
@@ -258,8 +260,10 @@ def main():
     if detail_items:
         workers = max(1, min(DETAIL_FETCH_WORKERS, len(detail_items)))
         print(f"Fetching {len(detail_items)} detail pages with {workers} workers")
+        started = time.monotonic()
         with ThreadPoolExecutor(max_workers=workers) as executor:
             detailed_items = list(executor.map(fetch_detail, detail_items))
+        print(f"DETAIL FETCH SECONDS: {time.monotonic() - started:.2f}")
     else:
         detailed_items = []
 
