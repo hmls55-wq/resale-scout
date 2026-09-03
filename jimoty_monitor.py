@@ -19,7 +19,6 @@ MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "10"))
 MAX_ITEMS_PER_PAGE = 50
 DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "100"))
 BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
-# 名古屋市中村区の代表座標。distance=50 と併用して検索地点を固定する。
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
 DISTANCE_KM = os.environ.get("JIMOTY_DISTANCE_KM", "50")
@@ -99,11 +98,7 @@ def extract_items(page_html):
 
 
 def page_url(page):
-    params = {
-        "distance": DISTANCE_KM,
-        "lat": CENTER_LAT,
-        "lng": CENTER_LNG,
-    }
+    params = {"distance": DISTANCE_KM, "lat": CENTER_LAT, "lng": CENTER_LNG}
     if page > 1:
         params["page"] = str(page)
     return BASE_URL + "?" + urllib.parse.urlencode(params)
@@ -132,7 +127,6 @@ def keyword_match(text, keyword):
     needle = normalize(keyword)
     if not needle:
         return False
-    # 英数字だけの短い語は単語境界を意識して誤爆を減らす。
     if re.fullmatch(r"[a-z0-9][a-z0-9 .&'’+\-]*", needle):
         pattern = r"(?<![a-z0-9])" + re.escape(needle) + r"(?![a-z0-9])"
         return re.search(pattern, haystack) is not None
@@ -140,6 +134,7 @@ def keyword_match(text, keyword):
 
 
 def match_rules(item, rules):
+    # タイトルだけでなく、詳細ページから取得した本文も必ず検索する。
     text = f"{item.get('title', '')}\n{item.get('description', '')}"
     matches = []
     for rule in rules:
@@ -155,13 +150,15 @@ def match_rules(item, rules):
 def fetch_detail(item):
     try:
         page = fetch(item["url"])
-        # OGP/description があれば、一覧カードより長い説明を優先する。
         descriptions = []
-        for pat in [
+        # 属性順が逆のmetaタグにも対応。
+        patterns = [
             r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
             r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
             r'<meta[^>]+content=["\'](.*?)["\'][^>]+property=["\']og:description["\']',
-        ]:
+            r'<meta[^>]+content=["\'](.*?)["\'][^>]+name=["\']description["\']',
+        ]
+        for pat in patterns:
             descriptions.extend(clean(x) for x in re.findall(pat, page, re.I | re.S))
         if descriptions:
             item["description"] = max(descriptions, key=len)[:12000]
@@ -178,15 +175,13 @@ def post_discord(webhook, item, matches):
     desc = item.get("description", "")
     if len(desc) > 900:
         desc = desc[:900] + "…"
+    price_line = f"価格：{item.get('price'):,}円" if isinstance(item.get("price"), int) else "価格：不明"
     payload = {
         "content": "🚨 ジモティー新着・通知条件一致",
         "embeds": [{
             "title": item["title"],
             "url": item["url"],
-            "description": (
-                f"通知条件：{matched}\n"
-                f"価格：{item.get('price'):,}円\n" if isinstance(item.get("price"), int) else f"通知条件：{matched}\n価格：不明\n"
-            ) + f"\n商品説明：\n{desc}\n\nResell Scout / Jimoty"
+            "description": f"通知条件：{matched}\n{price_line}\n\n商品説明：\n{desc}\n\nResell Scout / Jimoty"
         }],
     }
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -222,7 +217,7 @@ def main():
 
     all_items = []
     page_seen_urls = set()
-    boundary_hit = False
+    # 既知URLを見つけてもページ取得を止めない。Jimotyの並び順が変わっても取りこぼしにくくする。
     for page in range(1, MAX_PAGES + 1):
         url = page_url(page)
         print(f"===== collect page {page}/{MAX_PAGES}: {url} =====")
@@ -239,16 +234,10 @@ def main():
             all_items.append(item)
             if item["url"] not in seen:
                 page_new += 1
-            else:
-                boundary_hit = True
         print(f"Page {page}: unseen={page_new}")
-        # 新着順ページなので、既知URLに到達したらその先は原則として古い。
-        if initialized and boundary_hit:
-            break
         if len(items) < MAX_ITEMS_PER_PAGE:
             break
 
-    # 初回は現在見えている商品をDBに登録するだけ。過去商品の大量通知を防ぐ。
     if not initialized:
         state["seen_urls"] = list(page_seen_urls)[-20000:]
         state["items"] = {item["url"]: item for item in all_items[-20000:]}
@@ -268,17 +257,17 @@ def main():
     for item in new_items[:DETAIL_FETCH_LIMIT]:
         item = fetch_detail(item)
         matches = match_rules(item, rules)
+        print(f"MATCH CHECK: title={item['title']!r} matches={[m['keyword'] for m in matches]}")
         db_items[item["url"]] = item
         if not matches:
             continue
         post_discord(webhook, item, matches)
         notified.append({"url": item["url"], "title": item["title"], "matches": matches})
 
-    # 詳細取得上限を超えた新着もDBには記録し、次回以降の重複を防ぐ。
     for item in new_items[DETAIL_FETCH_LIMIT:]:
         db_items[item["url"]] = item
 
-    # 通知済みかどうかではなく「収集済み」をDBとして管理する。
+    # 収集済みURLをDBに登録し、次回の重複通知を防ぐ。
     seen.update(item["url"] for item in new_items)
     state["seen_urls"] = list(seen)[-20000:]
     state["items"] = dict(list(db_items.items())[-20000:])
