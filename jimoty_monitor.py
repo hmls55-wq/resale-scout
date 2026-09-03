@@ -2,6 +2,7 @@ import html as html_lib
 import json
 import os
 import re
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -18,8 +19,8 @@ RESULT_PATH = Path(os.environ.get("JIMOTY_RESULT_PATH", "jimoty_monitor_result.j
 DISCORD_RETRIES = 4
 MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "1"))
 MAX_ITEMS_PER_PAGE = 50
-DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "20"))
-DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "20"))
+DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "10"))
+DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "5"))
 HTTP_TIMEOUT = int(os.environ.get("JIMOTY_HTTP_TIMEOUT", "8"))
 BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
@@ -29,23 +30,29 @@ UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.1
 
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
-        "Cache-Control": "no-cache",
-        "Referer": "https://jmty.jp/",
-        "Connection": "close",
-    })
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-            body = r.read().decode("utf-8", errors="ignore")
-            elapsed = time.monotonic() - started
-            print(f"HTTP {r.status}, HTML {len(body):,} bytes, {elapsed:.2f}s")
-            if len(body) < 5_000:
-                raise RuntimeError(f"HTMLが短すぎます: {len(body)} bytes")
-            return body
+        # curl has a reliable hard wall-clock timeout on the GitHub runner.
+        cmd = [
+            "curl", "-fsSL", "--max-time", str(HTTP_TIMEOUT),
+            "-A", UA,
+            "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "-H", "Accept-Language: ja,en-US;q=0.9,en;q=0.8",
+            "-H", "Cache-Control: no-cache",
+            "-H", "Referer: https://jmty.jp/",
+            "-H", "Connection: close",
+            url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, timeout=HTTP_TIMEOUT + 2)
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(detail or f"curl exit {result.returncode}")
+        body = result.stdout.decode("utf-8", errors="ignore")
+        elapsed = time.monotonic() - started
+        print(f"HTTP 200, HTML {len(body):,} bytes, {elapsed:.2f}s")
+        if len(body) < 5_000:
+            raise RuntimeError(f"HTMLが短すぎます: {len(body)} bytes")
+        return body
     except Exception as e:
         print(f"HTTP failed after {time.monotonic() - started:.2f}s: {url} :: {e}")
         raise
@@ -158,8 +165,8 @@ def fetch_detail(item):
         patterns = [
             r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
             r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
-            r'<meta[^>]+content=["\'](.*?)["\'][^>]+property=["\']og:description["\']',
-            r'<meta[^>]+content=["\'](.*?)["\'][^>]+name=["\']description["\']',
+            r'<meta[^>]+content=["\'](.*?)["\']\s+property=["\']og:description["\']',
+            r'<meta[^>]+content=["\'](.*?)["\']\s+name=["\']description["\']',
         ]
         for pat in patterns:
             descriptions.extend(clean(x) for x in re.findall(pat, page, re.I | re.S))
@@ -167,9 +174,12 @@ def fetch_detail(item):
             item["description"] = max(descriptions, key=len)[:12000]
         else:
             item["description"] = clean(page)[:12000]
-        item["price"] = item.get("price") if item.get("price") is not None else extract_price(item["description"])
+        if item.get("price") is None:
+            item["price"] = extract_price(item["description"])
+        item["detail_ok"] = True
     except Exception as e:
         print(f"Detail fetch failed: {item['url']} :: {e}")
+        item["detail_ok"] = False
     return item
 
 
@@ -208,6 +218,10 @@ def main():
     state = load_state()
     seen = set(state.get("seen_urls", []))
     initialized = bool(state.get("initialized"))
+    db_items = state.get("items", {})
+    pending = state.get("pending_items", {})
+    if not isinstance(pending, dict):
+        pending = {}
 
     all_items = []
     page_seen_urls = set()
@@ -227,8 +241,9 @@ def main():
                 continue
             page_seen_urls.add(item["url"])
             all_items.append(item)
-            if item["url"] not in seen:
+            if item["url"] not in seen and item["url"] not in pending:
                 page_new += 1
+                pending[item["url"]] = item
         print(f"Page {page}: unseen={page_new}")
         if len(items) < MAX_ITEMS_PER_PAGE:
             break
@@ -236,20 +251,23 @@ def main():
     if not initialized:
         state["seen_urls"] = list(page_seen_urls)[-20000:]
         state["items"] = {item["url"]: item for item in all_items[-20000:]}
+        state["pending_items"] = {}
         state["initialized"] = True
         state["last_checked_at"] = now.isoformat()
         state["last_new_count"] = 0
         save_state(state)
         print(f"Database initialized with {len(page_seen_urls)} URLs; no notifications.")
-        RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": 0, "notified": 0, "elapsed_seconds": round(time.monotonic() - overall_started, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
+        RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": 0, "pending": 0, "notified": 0, "elapsed_seconds": round(time.monotonic() - overall_started, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
         return
 
-    new_items = [item for item in all_items if item["url"] not in seen]
-    print(f"Total collected: {len(all_items)}, truly new: {len(new_items)}")
+    new_urls = [url for url in page_seen_urls if url not in seen]
+    print(f"Total collected: {len(all_items)}, new URLs this scan: {len(new_urls)}, pending backlog: {len(pending)}")
 
+    # Process only a small batch each run. Unfinished items remain pending, so nothing is lost.
+    pending_urls = list(pending.keys())[:DETAIL_FETCH_LIMIT]
+    detail_items = [pending[url] for url in pending_urls]
     notified = []
-    db_items = state.get("items", {})
-    detail_items = new_items[:DETAIL_FETCH_LIMIT]
+    failed_details = 0
     detail_started = time.monotonic()
     if detail_items:
         workers = max(1, min(DETAIL_FETCH_WORKERS, len(detail_items)))
@@ -261,27 +279,50 @@ def main():
     print(f"DETAIL FETCH SECONDS: {time.monotonic() - detail_started:.2f}")
 
     for item in detailed_items:
+        url = item["url"]
+        if not item.get("detail_ok"):
+            failed_details += 1
+            continue
         matches = match_rules(item, rules)
         print(f"MATCH CHECK: title={item['title']!r} matches={[m['keyword'] for m in matches]}")
-        db_items[item["url"]] = item
+        db_items[url] = item
         if matches:
             post_discord(webhook, item, matches)
-            notified.append({"url": item["url"], "title": item["title"], "matches": matches})
+            notified.append({"url": url, "title": item["title"], "matches": matches})
+        seen.add(url)
+        pending.pop(url, None)
 
-    for item in new_items[DETAIL_FETCH_LIMIT:]:
-        db_items[item["url"]] = item
+    # Keep the lightweight list data for everything discovered this scan.
+    for item in all_items:
+        if item["url"] not in seen:
+            pending.setdefault(item["url"], item)
+        else:
+            db_items.setdefault(item["url"], item)
 
-    seen.update(item["url"] for item in new_items)
     state["seen_urls"] = list(seen)[-20000:]
     state["items"] = dict(list(db_items.items())[-20000:])
+    state["pending_items"] = dict(list(pending.items())[-20000:])
     state["last_checked_at"] = now.isoformat()
-    state["last_new_count"] = len(new_items)
+    state["last_new_count"] = len(new_urls)
+    state["last_pending_count"] = len(pending)
     state["last_notified_count"] = len(notified)
+    state["last_detail_failed_count"] = failed_details
     save_state(state)
 
     elapsed = time.monotonic() - overall_started
-    RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": len(new_items), "notified": len(notified), "notifications": notified, "elapsed_seconds": round(elapsed, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Done. New={len(new_items)}, notified={len(notified)}, elapsed={elapsed:.2f}s")
+    RESULT_PATH.write_text(json.dumps({
+        "checked_at": now.isoformat(),
+        "initialized": True,
+        "collected": len(all_items),
+        "new": len(new_urls),
+        "processed_details": len(detailed_items) - failed_details,
+        "detail_failed": failed_details,
+        "pending": len(pending),
+        "notified": len(notified),
+        "notifications": notified,
+        "elapsed_seconds": round(elapsed, 2),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Done. New={len(new_urls)}, detail_processed={len(detailed_items)-failed_details}, pending={len(pending)}, notified={len(notified)}, elapsed={elapsed:.2f}s")
 
 
 if __name__ == "__main__":
