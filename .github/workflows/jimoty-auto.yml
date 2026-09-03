@@ -42,10 +42,10 @@ jobs:
           JIMOTY_STATE_PATH: jimoty_db.json
           JIMOTY_RULES_PATH: notification_rules.json
           JIMOTY_RESULT_PATH: jimoty_monitor_result.json
-          # 5分監視では最新ページを最優先。詳細取得は並列化して高速化。
           JIMOTY_MAX_PAGES: 1
-          JIMOTY_DETAIL_FETCH_LIMIT: 50
+          JIMOTY_DETAIL_FETCH_LIMIT: 20
           JIMOTY_DETAIL_FETCH_WORKERS: 20
+          JIMOTY_HTTP_TIMEOUT: 8
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
