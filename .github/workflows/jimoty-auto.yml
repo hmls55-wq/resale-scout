@@ -25,8 +25,6 @@ jobs:
             search_term: イケア
           - key: ikea_alt
             search_term: イケヤ
-          - key: nitori
-            search_term: ニトリ
           - key: muji
             search_term: 無印良品
           - key: muji_en
