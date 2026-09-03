@@ -3,7 +3,7 @@ name: Jimoty Auto Monitor
 on:
   workflow_dispatch:
   schedule:
-    # GitHub schedule is only a launcher. The job itself checks every 5 minutes
+    # GitHub schedule is only a launcher. Each job checks every 5 minutes
     # for about 53 minutes, which is much more resilient to schedule delays.
     - cron: "7 * * * *"
       timezone: "Asia/Tokyo"
@@ -14,6 +14,15 @@ concurrency:
 
 jobs:
   search:
+    strategy:
+      fail-fast: false
+      matrix:
+        search_term:
+          - IKEA
+          - ニトリ
+          - 無印良品
+          - カリモク
+          - アンティーク家具
     runs-on: ubuntu-latest
     timeout-minutes: 55
     permissions:
@@ -29,24 +38,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=jimoty-one-search-state&per_page=1"
+          TERM="${{ matrix.search_term }}"
+          SAFE_TERM=$(printf '%s' "$TERM" | sha256sum | cut -d' ' -f1)
+          ARTIFACT_NAME="jimoty-state-${SAFE_TERM}"
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=1"
           URL=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$API" | jq -r '.artifacts[0].archive_download_url // empty')
           if [ -n "$URL" ]; then
             curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$URL" -o state.zip || true
             unzip -o state.zip -d . 2>/dev/null || true
           fi
-          test -f jimoty_one_search_state.json || echo '{"notified_urls":[]}' > jimoty_one_search_state.json
+          test -f "state_${SAFE_TERM}.json" || echo '{"notified_urls":[]}' > "state_${SAFE_TERM}.json"
 
-      - name: Run one-search monitor repeatedly
+      - name: Run search repeatedly
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          JIMOTY_SEARCH_TERM: "IKEA"
+          JIMOTY_SEARCH_TERM: ${{ matrix.search_term }}
+          JIMOTY_STATE_PATH: state_${{ matrix.search_term }}.json
+          JIMOTY_RESULT_PATH: result_${{ matrix.search_term }}.json
         run: |
           set -u
           for i in $(seq 1 11); do
-            echo "===== Jimoty check ${i}/11 at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
+            echo "===== Jimoty check ${i}/11: ${JIMOTY_SEARCH_TERM} at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
             if ! python jimoty_one_search.py; then
-              echo "Jimoty check ${i} failed; continuing to the next check."
+              echo "Jimoty check ${i} failed for ${JIMOTY_SEARCH_TERM}; continuing to the next check."
             fi
             if [ "$i" -lt 11 ]; then
               sleep 290
@@ -57,14 +71,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jimoty-one-search-state
-          path: jimoty_one_search_state.json
+          name: jimoty-state-${{ hashFiles(format('state_{0}.json', matrix.search_term)) }}
+          path: state_${{ matrix.search_term }}.json
           retention-days: 7
 
       - name: Upload result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: jimoty-one-search-result
-          path: jimoty_one_search_result.json
+          name: jimoty-result-${{ matrix.search_term }}
+          path: result_${{ matrix.search_term }}.json
           retention-days: 7
