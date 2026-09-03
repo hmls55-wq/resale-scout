@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -18,6 +19,7 @@ DISCORD_RETRIES = 4
 MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "10"))
 MAX_ITEMS_PER_PAGE = 50
 DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "100"))
+DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "8"))
 BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
@@ -254,8 +256,18 @@ def main():
 
     notified = []
     db_items = state.get("items", {})
-    for item in new_items[:DETAIL_FETCH_LIMIT]:
-        item = fetch_detail(item)
+    detail_items = new_items[:DETAIL_FETCH_LIMIT]
+
+    # 詳細ページ取得を並列化。従来は1件ずつ30秒待つ可能性があり、5分の実行時間制限に引っかかっていた。
+    if detail_items:
+        workers = max(1, min(DETAIL_FETCH_WORKERS, len(detail_items)))
+        print(f"Fetching {len(detail_items)} detail pages with {workers} workers")
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            detailed_items = list(executor.map(fetch_detail, detail_items))
+    else:
+        detailed_items = []
+
+    for item in detailed_items:
         matches = match_rules(item, rules)
         print(f"MATCH CHECK: title={item['title']!r} matches={[m['keyword'] for m in matches]}")
         db_items[item["url"]] = item
