@@ -3,7 +3,7 @@ name: Jimoty Auto Monitor
 on:
   workflow_dispatch:
   schedule:
-    # Run one global Jimoty scan every 5 minutes. Offset to avoid the busy top of the minute.
+    # Backup scheduler. The normal 5-minute loop is self-chained below.
     - cron: "3-59/5 * * * *"
 
 concurrency:
@@ -13,14 +13,17 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
-      actions: read
+      actions: write
       contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Start timer
+        run: date +%s > .jimoty_start_epoch
 
       - name: Restore Jimoty database
         env:
@@ -68,3 +71,20 @@ jobs:
           name: jimoty-global-result
           path: jimoty_monitor_result.json
           retention-days: 7
+
+      - name: Chain next 5-minute run
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          START=$(cat .jimoty_start_epoch 2>/dev/null || date +%s)
+          NOW=$(date +%s)
+          ELAPSED=$((NOW-START))
+          WAIT=$((300-ELAPSED))
+          if [ "$WAIT" -gt 0 ]; then
+            echo "Waiting ${WAIT}s so the next run starts about 5 minutes after this run began."
+            sleep "$WAIT"
+          fi
+          echo "Dispatching the next Jimoty Auto Monitor run..."
+          gh workflow run jimoty-auto.yml --repo "$GITHUB_REPOSITORY" --ref main
