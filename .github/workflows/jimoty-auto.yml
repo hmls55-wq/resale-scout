@@ -13,7 +13,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     permissions:
       actions: read
       contents: read
@@ -42,7 +42,8 @@ jobs:
           JIMOTY_STATE_PATH: jimoty_db.json
           JIMOTY_RULES_PATH: notification_rules.json
           JIMOTY_RESULT_PATH: jimoty_monitor_result.json
-          JIMOTY_MAX_PAGES: 10
+          # 5分監視では新着上位2ページを確認。新着商品の詳細ページだけ取得する。
+          JIMOTY_MAX_PAGES: 2
           JIMOTY_DETAIL_FETCH_LIMIT: 100
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
