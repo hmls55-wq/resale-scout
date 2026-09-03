@@ -3,8 +3,8 @@ name: Jimoty Auto Monitor
 on:
   workflow_dispatch:
   schedule:
-    # Run one global Jimoty scan every 5 minutes.
-    - cron: "*/5 * * * *"
+    # Run one global Jimoty scan every 5 minutes, offset from the busy top of the minute.
+    - cron: "2-59/5 * * * *"
 
 concurrency:
   group: jimoty-auto-monitor
