@@ -10,13 +10,14 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 SEARCH_TERM = os.environ.get("JIMOTY_SEARCH_TERM", "IKEA")
-STATE_PATH = Path("jimoty_one_search_state.json")
+STATE_PATH = Path(os.environ.get("JIMOTY_STATE_PATH", "jimoty_one_search_state.json"))
+RESULT_PATH = Path(os.environ.get("JIMOTY_RESULT_PATH", "jimoty_one_search_result.json"))
 MAX_NEW_ITEMS = 5
 MAX_PARSED_ITEMS = 100
 DISCORD_RETRIES = 4
 JST = ZoneInfo("Asia/Tokyo")
 BASE_URL = "https://jmty.jp/aichi/sale-fur-kw-"
-UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile Safari/604.1"
 
 
 def fetch(url):
@@ -52,8 +53,6 @@ def extract_price(text):
 
 
 def extract_items(html):
-    # ジモティー検索結果の並び順（通常は新着順）をそのまま使う。
-    # 日付のHTML表記には依存せず、商品リンク単位でカード情報を取得する。
     matches = list(re.finditer(
         r'<a[^>]+href=["\']([^"\']*article-[^"\']+)["\'][^>]*>(.*?)</a>',
         html, re.I | re.S
@@ -96,6 +95,7 @@ def load_state():
 def save_state(urls, initialized=True):
     STATE_PATH.write_text(json.dumps({
         "updated_at": datetime.now(JST).isoformat(),
+        "search_term": SEARCH_TERM,
         "initialized": initialized,
         "notified_urls": list(urls)[-5000:]
     }, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -128,12 +128,12 @@ def discord_notify(items):
         if i:
             time.sleep(1.25)
         post_discord(webhook, {
-            "content": "🚨 ジモティー新着テスト",
+            "content": "🚨 ジモティー新着",
             "embeds": [{
                 "title": item["title"],
                 "url": item["url"],
                 "description": f"検索：{SEARCH_TERM}\n価格：{item['price']:,}円\n掲載：検索結果の新着\n\nジモティーの検索結果から検出",
-                "footer": {"text": "Resell Scout / Jimoty one-search test"},
+                "footer": {"text": "Resell Scout / Jimoty"},
             }],
         })
 
@@ -146,8 +146,8 @@ def discord_diagnostic(parsed, latest, new_items, initialized):
         "content": "🧪 ジモティー監視テスト接続OK",
         "embeds": [{
             "title": f"{SEARCH_TERM}検索の診断結果",
-            "description": f"検索ページ取得：OK\n取得商品数：{parsed}件\n今回見る最新：{latest}件\nDiscord通知対象：{new_items}件\n状態初期化済み：{'はい' if initialized else 'いいえ'}\n\n次回から新しく出てきた商品だけ通知します。",
-            "footer": {"text": "Resell Scout / Jimoty one-search diagnostic"},
+            "description": f"検索ページ取得：OK\n取得商品数：{parsed}件\n今回見る最新：{latest}件\nDiscord通知対象：{new_items}件\n状態初期化済み：{'はい' if initialized else 'いいえ'}",
+            "footer": {"text": "Resell Scout / Jimoty diagnostic"},
         }],
     })
 
@@ -166,7 +166,6 @@ def main():
     state, initialized = load_state()
     current_urls = {x["url"] for x in items}
 
-    # 明示的なDiscordテスト。既存状態を変更せず、現在の最新1件だけを送る。
     test_notify = os.environ.get("JIMOTY_TEST_NOTIFY", "0") == "1"
     if test_notify:
         new_items = items[:1]
@@ -177,31 +176,24 @@ def main():
             raise RuntimeError("TEST: 通知対象の商品を取得できませんでした")
         save_state(state, initialized=initialized)
     elif not initialized:
-        # 初回だけ現在の一覧を既読として登録し、過去掲載品を一気に通知しない。
         state.update(current_urls)
         save_state(state, initialized=True)
         new_items = []
         print(f"State initialized with {len(current_urls)} URLs; no old items notified.")
     else:
-        # 未通知の新着を新しい順に最大5件通知。
-        # 最大5件を超えた新着は「既読」にせず、次回以降に順番に通知する。
         new_items = [x for x in items if x["url"] not in state][:MAX_NEW_ITEMS]
         print(f"New in latest {MAX_PARSED_ITEMS}: {len(new_items)}")
         if new_items:
             discord_notify(new_items)
             state.update(x["url"] for x in new_items)
-        # 現在の一覧を一括で既読にはしない。
-        # 新着のうち今回通知できなかったものを取りこぼさないため、
-        # 状態に追加するのは通知成功したURLだけとする。
         save_state(state, initialized=True)
 
-    # 診断通知は明示的に有効化したときだけ送る。
     if os.environ.get("JIMOTY_DIAGNOSTIC", "0") == "1":
         discord_diagnostic(len(items), len(latest_items), len(new_items), True)
 
     print("No new items; Discord notification skipped." if not new_items else f"Discord notified: {len(new_items)}")
 
-    Path("jimoty_one_search_result.json").write_text(json.dumps({
+    RESULT_PATH.write_text(json.dumps({
         "checked_at": now.isoformat(),
         "search_term": SEARCH_TERM,
         "search_url": url,
