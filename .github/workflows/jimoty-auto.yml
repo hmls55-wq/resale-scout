@@ -3,8 +3,8 @@ name: Jimoty Auto Monitor
 on:
   workflow_dispatch:
   schedule:
-    # GitHub schedule is only a launcher. One run performs an actual 5-minute loop.
-    - cron: "7 * * * *"
+    # Run one global Jimoty scan every 5 minutes.
+    - cron: "*/5 * * * *"
       timezone: "Asia/Tokyo"
 
 concurrency:
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 10
     permissions:
       actions: read
       contents: read
@@ -37,7 +37,7 @@ jobs:
           fi
           test -f jimoty_db.json || echo '{"initialized":false,"seen_urls":[],"items":{}}' > jimoty_db.json
 
-      - name: Run Jimoty collector every 5 minutes
+      - name: Run Jimoty global scan
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           JIMOTY_STATE_PATH: jimoty_db.json
@@ -48,17 +48,7 @@ jobs:
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
-        run: |
-          set -u
-          for i in $(seq 1 11); do
-            echo "===== Jimoty global check ${i}/11 at $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
-            if ! python jimoty_monitor.py; then
-              echo "Jimoty global check ${i} failed; continuing to the next check."
-            fi
-            if [ "$i" -lt 11 ]; then
-              sleep 290
-            fi
-          done
+        run: python jimoty_monitor.py
 
       - name: Upload Jimoty database
         if: always()
