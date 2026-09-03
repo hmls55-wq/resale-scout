@@ -16,10 +16,10 @@ STATE_PATH = Path(os.environ.get("JIMOTY_STATE_PATH", "jimoty_db.json"))
 RULES_PATH = Path(os.environ.get("JIMOTY_RULES_PATH", "notification_rules.json"))
 RESULT_PATH = Path(os.environ.get("JIMOTY_RESULT_PATH", "jimoty_monitor_result.json"))
 DISCORD_RETRIES = 4
-MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "10"))
+MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "1"))
 MAX_ITEMS_PER_PAGE = 50
-DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "100"))
-DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "8"))
+DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "50"))
+DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "20"))
 BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
@@ -35,7 +35,7 @@ def fetch(url):
         "Cache-Control": "no-cache",
         "Referer": "https://jmty.jp/",
     })
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=15) as r:
         body = r.read().decode("utf-8", errors="ignore")
         print(f"HTTP {r.status}, HTML {len(body):,} bytes")
         if len(body) < 5_000:
@@ -136,7 +136,6 @@ def keyword_match(text, keyword):
 
 
 def match_rules(item, rules):
-    # タイトルだけでなく、詳細ページから取得した本文も必ず検索する。
     text = f"{item.get('title', '')}\n{item.get('description', '')}"
     matches = []
     for rule in rules:
@@ -153,7 +152,6 @@ def fetch_detail(item):
     try:
         page = fetch(item["url"])
         descriptions = []
-        # 属性順が逆のmetaタグにも対応。
         patterns = [
             r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
             r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
@@ -219,7 +217,6 @@ def main():
 
     all_items = []
     page_seen_urls = set()
-    # 既知URLを見つけてもページ取得を止めない。Jimotyの並び順が変わっても取りこぼしにくくする。
     for page in range(1, MAX_PAGES + 1):
         url = page_url(page)
         print(f"===== collect page {page}/{MAX_PAGES}: {url} =====")
@@ -258,7 +255,6 @@ def main():
     db_items = state.get("items", {})
     detail_items = new_items[:DETAIL_FETCH_LIMIT]
 
-    # 詳細ページ取得を並列化。従来は1件ずつ30秒待つ可能性があり、5分の実行時間制限に引っかかっていた。
     if detail_items:
         workers = max(1, min(DETAIL_FETCH_WORKERS, len(detail_items)))
         print(f"Fetching {len(detail_items)} detail pages with {workers} workers")
@@ -279,7 +275,6 @@ def main():
     for item in new_items[DETAIL_FETCH_LIMIT:]:
         db_items[item["url"]] = item
 
-    # 収集済みURLをDBに登録し、次回の重複通知を防ぐ。
     seen.update(item["url"] for item in new_items)
     state["seen_urls"] = list(seen)[-20000:]
     state["items"] = dict(list(db_items.items())[-20000:])
