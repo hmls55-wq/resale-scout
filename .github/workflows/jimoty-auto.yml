@@ -55,18 +55,18 @@ jobs:
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
         run: |
-          # Normalize the known malformed expression before execution.
+          # Runtime guard: replace any malformed Detail priority print line safely.
           python - <<'PY'
           from pathlib import Path
           p = Path("jimoty_monitor.py")
-          s = p.read_text(encoding="utf-8")
-          bad = "min(len(pending_urls) - min(min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)))"
-          good = "min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)"
-          if bad in s:
-              s = s.replace(bad, good)
-          else:
-              s = s.replace("min(min(len(fresh_new_urls), DETAIL_FETCH_LIMIT))", good)
-          p.write_text(s, encoding="utf-8")
+          lines = p.read_text(encoding="utf-8").splitlines()
+          fixed = []
+          for line in lines:
+              if "Detail priority:" in line and "print(" in line:
+                  indent = line[:len(line) - len(line.lstrip())]
+                  line = indent + 'print(f"Detail priority: fresh={min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)}, old_pending={max(0, len(pending_urls) - min(len(fresh_new_urls), DETAIL_FETCH_LIMIT))}")'
+              fixed.append(line)
+          p.write_text("\n".join(fixed) + "\n", encoding="utf-8")
           PY
           python jimoty_monitor.py
 
