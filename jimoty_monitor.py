@@ -147,7 +147,10 @@ def save_state(data):
 
 def load_rules():
     data = json.loads(RULES_PATH.read_text(encoding="utf-8"))
-    return data.get("rules", [])
+    rules = data.get("rules", [])
+    # Priority manufacturer rule for the current Jimoty monitoring target.
+    rules = [{"name": "ITOKI", "keywords": ["ITOKI", "イトーキ", "ITOKI家具", "イトーキ家具"]}] + rules
+    return rules
 
 
 def keyword_match(text, keyword):
@@ -293,7 +296,7 @@ def main():
             detailed_items = list(executor.map(fetch_detail, detail_items))
     else:
         detailed_items = []
-    print(f"DETAIL FETCH SECONDS: {time.monotonic() - detail_started:.2f}")
+    print(f"DETAIL FETCH SECONDS: {time.monotonic() - detail_started:.2f}s")
 
     for item in detailed_items:
         url = item["url"]
