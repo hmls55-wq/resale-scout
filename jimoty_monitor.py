@@ -17,12 +17,13 @@ STATE_PATH = Path(os.environ.get("JIMOTY_STATE_PATH", "jimoty_db.json"))
 RULES_PATH = Path(os.environ.get("JIMOTY_RULES_PATH", "notification_rules.json"))
 RESULT_PATH = Path(os.environ.get("JIMOTY_RESULT_PATH", "jimoty_monitor_result.json"))
 DISCORD_RETRIES = 4
-MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "1"))
+MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "2"))
 MAX_ITEMS_PER_PAGE = 50
-DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "10"))
+DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "20"))
 DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "5"))
-HTTP_TIMEOUT = int(os.environ.get("JIMOTY_HTTP_TIMEOUT", "8"))
-BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
+HTTP_TIMEOUT = int(os.environ.get("JIMOTY_HTTP_TIMEOUT", "15"))
+BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale-fur")
+BASE_URLS = [u.strip().rstrip("/") for u in os.environ.get("JIMOTY_BASE_URLS", BASE_URL).split(",") if u.strip()]
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
 DISTANCE_KM = os.environ.get("JIMOTY_DISTANCE_KM", "50")
@@ -81,7 +82,6 @@ def extract_price(text):
 
 
 def extract_detail_price(page_html):
-    """Extract the price from the item's own detail page, not nearby list-card text."""
     patterns = [
         r"商品価格\s*(?:\||｜|:|：)?\s*([0-9][0-9,]*)\s*円",
         r'<[^>]+itemprop=["\']price["\'][^>]+content=["\']([0-9][0-9,]*)["\']',
@@ -125,11 +125,11 @@ def extract_items(page_html):
     return items
 
 
-def page_url(page):
+def page_url(base_url, page):
     params = {"distance": DISTANCE_KM, "lat": CENTER_LAT, "lng": CENTER_LNG}
     if page > 1:
         params["page"] = str(page)
-    return BASE_URL + "?" + urllib.parse.urlencode(params)
+    return base_url + "?" + urllib.parse.urlencode(params)
 
 
 def load_state():
@@ -177,9 +177,6 @@ def match_rules(item, rules):
 def fetch_detail(item):
     try:
         page = fetch(item["url"])
-
-        # IMPORTANT: the list page can contain prices from neighboring cards.
-        # Always prefer the price extracted from the item's own detail page.
         detail_price = extract_detail_price(page)
         if detail_price is not None:
             item["price"] = detail_price
@@ -194,12 +191,7 @@ def fetch_detail(item):
         ]
         for pat in patterns:
             descriptions.extend(clean(x) for x in re.findall(pat, page, re.I | re.S))
-        if descriptions:
-            item["description"] = max(descriptions, key=len)[:12000]
-        else:
-            item["description"] = clean(page)[:12000]
-
-        # Fallback only when the detail page did not expose a structured price.
+        item["description"] = (max(descriptions, key=len) if descriptions else clean(page))[:12000]
         if item.get("price") is None:
             item["price"] = extract_price(item["description"])
         item["detail_ok"] = True
@@ -251,28 +243,29 @@ def main():
 
     all_items = []
     page_seen_urls = set()
-    for page in range(1, MAX_PAGES + 1):
-        url = page_url(page)
-        print(f"===== collect page {page}/{MAX_PAGES}: {url} =====")
-        started = time.monotonic()
-        html = fetch(url)
-        print(f"LIST FETCH SECONDS: {time.monotonic() - started:.2f}")
-        items = extract_items(html)
-        print(f"Parsed page {page}: {len(items)}")
-        if not items:
-            break
-        page_new = 0
-        for item in items:
-            if item["url"] in page_seen_urls:
-                continue
-            page_seen_urls.add(item["url"])
-            all_items.append(item)
-            if item["url"] not in seen and item["url"] not in pending:
-                page_new += 1
-                pending[item["url"]] = item
-        print(f"Page {page}: unseen={page_new}")
-        if len(items) < MAX_ITEMS_PER_PAGE:
-            break
+    for base_url in BASE_URLS:
+        for page in range(1, MAX_PAGES + 1):
+            url = page_url(base_url, page)
+            print(f"===== collect {base_url} page {page}/{MAX_PAGES}: {url} =====")
+            started = time.monotonic()
+            html = fetch(url)
+            print(f"LIST FETCH SECONDS: {time.monotonic() - started:.2f}")
+            items = extract_items(html)
+            print(f"Parsed {base_url} page {page}: {len(items)}")
+            if not items:
+                break
+            page_new = 0
+            for item in items:
+                if item["url"] in page_seen_urls:
+                    continue
+                page_seen_urls.add(item["url"])
+                all_items.append(item)
+                if item["url"] not in seen and item["url"] not in pending:
+                    page_new += 1
+                    pending[item["url"]] = item
+            print(f"Page {page}: unseen={page_new}")
+            if len(items) < MAX_ITEMS_PER_PAGE:
+                break
 
     if not initialized:
         state["seen_urls"] = list(page_seen_urls)[-20000:]
@@ -282,7 +275,6 @@ def main():
         state["last_checked_at"] = now.isoformat()
         state["last_new_count"] = 0
         save_state(state)
-        print(f"Database initialized with {len(page_seen_urls)} URLs; no notifications.")
         RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": 0, "pending": 0, "notified": 0, "elapsed_seconds": round(time.monotonic() - overall_started, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
         return
 
