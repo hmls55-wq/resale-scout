@@ -55,18 +55,50 @@ jobs:
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
         run: |
-          # Runtime guard: replace the malformed legacy Detail priority print line.
+          # Keep the checked-in source authoritative; only normalize the known
+          # malformed description extraction block for legacy revisions.
           python - <<'PY'
           from pathlib import Path
           p = Path("jimoty_monitor.py")
-          lines = p.read_text(encoding="utf-8").splitlines()
-          out = []
-          for line in lines:
-              if "Detail priority:" in line and "print(" in line:
-                  indent = line[:len(line) - len(line.lstrip())]
-                  line = indent + 'print("Detail priority: fresh", min(len(fresh_new_urls), DETAIL_FETCH_LIMIT), "old_pending", max(0, len(pending_urls) - min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)))'
-              out.append(line)
-          p.write_text("\n".join(out) + "\n", encoding="utf-8")
+          s = p.read_text(encoding="utf-8")
+          old = '''        descriptions = []
+          patterns = [
+              r'<meta[^>]+property=["\\']og:description["\\'][^>]+content=["\\'](.*?)["\\']',
+              r'<meta[^>]+name=["\\']description["\\'][^>]+content=["\\'](.*?)["\\']',
+              r'<meta[^>]+content=["\\'](.*?)["\\']\\s+property=["\\']og:description["\\']',
+              r'<meta[^>]+content=["\\'](.*?)["\\']\\s+name=["\\']description["\\']',
+          ]
+          for pat in patterns:
+              descriptions.extend(clean(x) for x in re.findall(pat, page, re.I | re.S))
+          item["description"] = (max(descriptions, key=len) if descriptions else clean(page))[:12000]
+          '''
+          new = '''        # Parse meta descriptions structurally instead of using regex over HTML attributes.
+          from html.parser import HTMLParser
+
+          class _MetaDescriptionParser(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.descriptions = []
+
+              def handle_starttag(self, tag, attrs):
+                  if tag.lower() != "meta":
+                      return
+                  attrs = dict(attrs)
+                  key = (attrs.get("property") or attrs.get("name") or "").lower()
+                  if key in ("og:description", "description") and attrs.get("content"):
+                      self.descriptions.append(attrs["content"])
+
+          parser = _MetaDescriptionParser()
+          parser.feed(page)
+          descriptions = [clean(x) for x in parser.descriptions if clean(x)]
+          item["description"] = (max(descriptions, key=len) if descriptions else clean(page))[:12000]
+          '''
+          if old in s:
+              s = s.replace(old, new)
+              print("Applied structural meta-description parser patch")
+          else:
+              print("Source already uses structural meta-description parsing or legacy block not found")
+          p.write_text(s, encoding="utf-8")
           PY
           python jimoty_monitor.py
 
