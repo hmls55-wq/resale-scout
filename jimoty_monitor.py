@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -184,15 +185,22 @@ def fetch_detail(item):
             item["price"] = detail_price
             print(f"DETAIL PRICE: {detail_price:,}円 for {item['url']}")
 
-        descriptions = []
-        patterns = [
-            r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
-            r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']',
-            r'<meta[^>]+content=["\'](.*?)["\']\s+property=["\']og:description["\']',
-            r'<meta[^>]+content=["\'](.*?)["\']\s+name=["\']description["\']',
-        ]
-        for pat in patterns:
-            descriptions.extend(clean(x) for x in re.findall(pat, page, re.I | re.S))
+        class MetaDescriptionParser(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.descriptions = []
+
+            def handle_starttag(self, tag, attrs):
+                if tag.lower() != "meta":
+                    return
+                attrs = dict(attrs)
+                key = (attrs.get("property") or attrs.get("name") or "").lower()
+                if key in ("og:description", "description") and attrs.get("content"):
+                    self.descriptions.append(attrs["content"])
+
+        parser = MetaDescriptionParser()
+        parser.feed(page)
+        descriptions = [clean(x) for x in parser.descriptions if clean(x)]
         item["description"] = (max(descriptions, key=len) if descriptions else clean(page))[:12000]
         if item.get("price") is None:
             item["price"] = extract_price(item["description"])
@@ -253,7 +261,7 @@ def main():
             print(f"===== collect {base_url} page {page}/{MAX_PAGES}: {url} =====")
             started = time.monotonic()
             html = fetch(url)
-            print(f"LIST FETCH SECONDS: {time.monotonic() - started:.2f}")
+            print(f"LIST FETCH SECONDS: {time.monotonic() - started:.2f}s")
             items = extract_items(html)
             print(f"Parsed {base_url} page {page}: {len(items)}")
             if not items:
@@ -295,7 +303,7 @@ def main():
     old_pending_urls = [url for url in pending.keys() if url not in fresh_set]
     pending_urls = (fresh_new_urls + old_pending_urls)[:DETAIL_FETCH_LIMIT]
     detail_items = [pending[url] for url in pending_urls]
-    print(f"Detail priority: fresh={min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)}, old_pending={max(0, len(pending_urls) - min(len(fresh_new_urls, DETAIL_FETCH_LIMIT)))}")
+    print(f"Detail priority: fresh={min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)}, old_pending={max(0, len(pending_urls) - min(len(fresh_new_urls), DETAIL_FETCH_LIMIT))}")
 
     notified = []
     failed_details = 0
