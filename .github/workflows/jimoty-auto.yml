@@ -50,8 +50,9 @@ jobs:
           JIMOTY_BASE_URLS: https://jmty.jp/aichi/sale,https://jmty.jp/gifu/sale,https://jmty.jp/mie/sale,https://jmty.jp/shiga/sale
           JIMOTY_BASE_URL: https://jmty.jp/aichi/sale
           JIMOTY_MAX_PAGES: 2
-          JIMOTY_DETAIL_FETCH_LIMIT: 20
-          JIMOTY_DETAIL_FETCH_WORKERS: 5
+          # Process fresh listings first; keep enough capacity to work through backlog.
+          JIMOTY_DETAIL_FETCH_LIMIT: 60
+          JIMOTY_DETAIL_FETCH_WORKERS: 10
           JIMOTY_HTTP_TIMEOUT: 15
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681

@@ -19,10 +19,10 @@ RESULT_PATH = Path(os.environ.get("JIMOTY_RESULT_PATH", "jimoty_monitor_result.j
 DISCORD_RETRIES = 4
 MAX_PAGES = int(os.environ.get("JIMOTY_MAX_PAGES", "2"))
 MAX_ITEMS_PER_PAGE = 50
-DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "20"))
-DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "5"))
+DETAIL_FETCH_LIMIT = int(os.environ.get("JIMOTY_DETAIL_FETCH_LIMIT", "60"))
+DETAIL_FETCH_WORKERS = int(os.environ.get("JIMOTY_DETAIL_FETCH_WORKERS", "10"))
 HTTP_TIMEOUT = int(os.environ.get("JIMOTY_HTTP_TIMEOUT", "15"))
-BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale-fur")
+BASE_URL = os.environ.get("JIMOTY_BASE_URL", "https://jmty.jp/aichi/sale")
 BASE_URLS = [u.strip().rstrip("/") for u in os.environ.get("JIMOTY_BASE_URLS", BASE_URL).split(",") if u.strip()]
 CENTER_LAT = os.environ.get("JIMOTY_CENTER_LAT", "35.1681")
 CENTER_LNG = os.environ.get("JIMOTY_CENTER_LNG", "136.8734")
@@ -148,7 +148,6 @@ def save_state(data):
 def load_rules():
     data = json.loads(RULES_PATH.read_text(encoding="utf-8"))
     rules = data.get("rules", [])
-    # Priority manufacturer rule for the current Jimoty monitoring target.
     rules = [{"name": "ITOKI", "keywords": ["ITOKI", "イトーキ", "ITOKI家具", "イトーキ家具"]}] + rules
     return rules
 
@@ -243,6 +242,8 @@ def main():
     pending = state.get("pending_items", {})
     if not isinstance(pending, dict):
         pending = {}
+    pending_before = set(pending)
+    fresh_new_urls = []
 
     all_items = []
     page_seen_urls = set()
@@ -259,14 +260,16 @@ def main():
                 break
             page_new = 0
             for item in items:
-                if item["url"] in page_seen_urls:
+                item_url = item["url"]
+                if item_url in page_seen_urls:
                     continue
-                page_seen_urls.add(item["url"])
+                page_seen_urls.add(item_url)
                 all_items.append(item)
-                if item["url"] not in seen and item["url"] not in pending:
+                if item_url not in seen and item_url not in pending:
                     page_new += 1
-                    pending[item["url"]] = item
-            print(f"Page {page}: unseen={page_new}")
+                    pending[item_url] = item
+                    fresh_new_urls.append(item_url)
+            print(f"Page {page}: genuinely_new={page_new}")
             if len(items) < MAX_ITEMS_PER_PAGE:
                 break
 
@@ -281,11 +284,19 @@ def main():
         RESULT_PATH.write_text(json.dumps({"checked_at": now.isoformat(), "initialized": True, "collected": len(all_items), "new": 0, "pending": 0, "notified": 0, "elapsed_seconds": round(time.monotonic() - overall_started, 2)}, ensure_ascii=False, indent=2), encoding="utf-8")
         return
 
-    new_urls = [url for url in page_seen_urls if url not in seen]
-    print(f"Total collected: {len(all_items)}, new URLs this scan: {len(new_urls)}, pending backlog: {len(pending)}")
+    fresh_set = set(fresh_new_urls)
+    already_pending_seen = len(pending_before.intersection(page_seen_urls - seen))
+    print(
+        f"Total collected: {len(all_items)}, genuinely new URLs: {len(fresh_new_urls)}, "
+        f"already-pending seen again: {already_pending_seen}, pending backlog: {len(pending)}"
+    )
 
-    pending_urls = list(pending.keys())[:DETAIL_FETCH_LIMIT]
+    # Newly discovered listings always go first. Older failed/pending details follow.
+    old_pending_urls = [url for url in pending.keys() if url not in fresh_set]
+    pending_urls = (fresh_new_urls + old_pending_urls)[:DETAIL_FETCH_LIMIT]
     detail_items = [pending[url] for url in pending_urls]
+    print(f"Detail priority: fresh={min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)}, old_pending={max(0, len(pending_urls) - min(len(fresh_new_urls, DETAIL_FETCH_LIMIT)))}")
+
     notified = []
     failed_details = 0
     detail_started = time.monotonic()
@@ -322,7 +333,7 @@ def main():
     state["items"] = dict(list(db_items.items())[-20000:])
     state["pending_items"] = dict(list(pending.items())[-20000:])
     state["last_checked_at"] = now.isoformat()
-    state["last_new_count"] = len(new_urls)
+    state["last_new_count"] = len(fresh_new_urls)
     state["last_pending_count"] = len(pending)
     state["last_notified_count"] = len(notified)
     state["last_detail_failed_count"] = failed_details
@@ -333,15 +344,15 @@ def main():
         "checked_at": now.isoformat(),
         "initialized": True,
         "collected": len(all_items),
-        "new": len(new_urls),
+        "new": len(fresh_new_urls),
+        "already_pending_seen": already_pending_seen,
         "processed_details": len(detailed_items) - failed_details,
         "detail_failed": failed_details,
         "pending": len(pending),
         "notified": len(notified),
-        "notifications": notified,
         "elapsed_seconds": round(elapsed, 2),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Done. New={len(new_urls)}, detail_processed={len(detailed_items)-failed_details}, pending={len(pending)}, notified={len(notified)}, elapsed={elapsed:.2f}s")
+    print(f"RESULT: collected={len(all_items)} new={len(fresh_new_urls)} already_pending_seen={already_pending_seen} processed={len(detailed_items) - failed_details} failed={failed_details} pending={len(pending)} notified={len(notified)} elapsed={elapsed:.2f}s")
 
 
 if __name__ == "__main__":
