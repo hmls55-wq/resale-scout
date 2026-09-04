@@ -45,15 +45,15 @@ jobs:
           JIMOTY_STATE_PATH: jimoty_db.json
           JIMOTY_RULES_PATH: notification_rules.json
           JIMOTY_RESULT_PATH: jimoty_monitor_result.json
-          # Use Jimoty's area portal so posts in nearby prefectures (e.g. Gifu)
-          # are included when they fall inside the configured radius.
-          JIMOTY_BASE_URL: https://jmty.jp/s/area_portal
+          # Jimoty's area portal returned zero parsed listings from GitHub Actions.
+          # Use the public prefecture furniture feeds instead; the same radius
+          # parameters keep the scan focused around Nagoya.
+          JIMOTY_BASE_URLS: https://jmty.jp/aichi/sale-fur,https://jmty.jp/gifu/sale-fur,https://jmty.jp/mie/sale-fur,https://jmty.jp/shiga/sale-fur
+          JIMOTY_BASE_URL: https://jmty.jp/aichi/sale-fur
           JIMOTY_MAX_PAGES: 2
-          # Normal runs should only have a few new posts. If there is a burst,
-          # pending_items carries the rest safely into the next 5-minute run.
-          JIMOTY_DETAIL_FETCH_LIMIT: 10
+          JIMOTY_DETAIL_FETCH_LIMIT: 20
           JIMOTY_DETAIL_FETCH_WORKERS: 5
-          JIMOTY_HTTP_TIMEOUT: 8
+          JIMOTY_HTTP_TIMEOUT: 15
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
