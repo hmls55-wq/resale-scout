@@ -59,6 +59,7 @@ jobs:
           # malformed description extraction block for legacy revisions.
           python - <<'PY'
           from pathlib import Path
+          import json
           p = Path("jimoty_monitor.py")
           s = p.read_text(encoding="utf-8")
           old = '''        descriptions = []
@@ -200,6 +201,27 @@ jobs:
               s = s.replace('payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\\n{price_line}', 'payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\\n{rank_line}\\n{distance_line}\\n{price_line}', 1)
 
           p.write_text(s, encoding="utf-8")
+
+          # Merge the new product/series keyword master into the runtime rules.
+          # This keeps notification_rules.json as the main source while allowing the
+          # product dictionary to evolve independently without overwriting existing rules.
+          rules_path = Path("notification_rules.json")
+          product_path = Path("product_keywords.json")
+          if product_path.exists():
+              base = json.loads(rules_path.read_text(encoding="utf-8"))
+              extra = json.loads(product_path.read_text(encoding="utf-8"))
+              base_rules = base.setdefault("rules", [])
+              for extra_rule in extra.get("rules", []):
+                  target = next((r for r in base_rules if r.get("name") == extra_rule.get("name")), None)
+                  if target is None:
+                      base_rules.append(extra_rule)
+                  else:
+                      merged = list(target.get("keywords", [])) + list(extra_rule.get("keywords", []))
+                      target["keywords"] = list(dict.fromkeys(merged))
+              base["version"] = max(int(base.get("version", 0)), int(extra.get("version", 0)) + 6)
+              rules_path.write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+              print(f"Merged supplemental product keywords: {len(extra.get('rules', []))} rule(s)")
+
           print("Applied C-rank rules: IKEA/MUJI <= 25km")
           PY
           python jimoty_monitor.py
