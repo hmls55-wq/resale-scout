@@ -32,7 +32,6 @@ UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.1
 def fetch(url):
     started = time.monotonic()
     try:
-        # curl has a reliable hard wall-clock timeout on the GitHub runner.
         cmd = [
             "curl", "-fsSL", "--max-time", str(HTTP_TIMEOUT),
             "-A", UA,
@@ -78,6 +77,23 @@ def extract_price(text):
             return int(m.group(1).replace(",", ""))
     if "無料" in text:
         return 0
+    return None
+
+
+def extract_detail_price(page_html):
+    """Extract the price from the item's own detail page, not nearby list-card text."""
+    patterns = [
+        r"商品価格\s*(?:\||｜|:|：)?\s*([0-9][0-9,]*)\s*円",
+        r'<[^>]+itemprop=["\']price["\'][^>]+content=["\']([0-9][0-9,]*)["\']',
+        r'<[^>]+content=["\']([0-9][0-9,]*)["\'][^>]+itemprop=["\']price["\']',
+        r'<meta[^>]+property=["\']product:price:amount["\'][^>]+content=["\']([0-9][0-9,]*)["\']',
+        r'<meta[^>]+content=["\']([0-9][0-9,]*)["\'][^>]+property=["\']product:price:amount["\']',
+        r'"price"\s*:\s*"?([0-9][0-9,]*)"?',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, page_html, re.I | re.S)
+        if m:
+            return int(m.group(1).replace(",", ""))
     return None
 
 
@@ -161,6 +177,14 @@ def match_rules(item, rules):
 def fetch_detail(item):
     try:
         page = fetch(item["url"])
+
+        # IMPORTANT: the list page can contain prices from neighboring cards.
+        # Always prefer the price extracted from the item's own detail page.
+        detail_price = extract_detail_price(page)
+        if detail_price is not None:
+            item["price"] = detail_price
+            print(f"DETAIL PRICE: {detail_price:,}円 for {item['url']}")
+
         descriptions = []
         patterns = [
             r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
@@ -174,6 +198,8 @@ def fetch_detail(item):
             item["description"] = max(descriptions, key=len)[:12000]
         else:
             item["description"] = clean(page)[:12000]
+
+        # Fallback only when the detail page did not expose a structured price.
         if item.get("price") is None:
             item["price"] = extract_price(item["description"])
         item["detail_ok"] = True
@@ -263,7 +289,6 @@ def main():
     new_urls = [url for url in page_seen_urls if url not in seen]
     print(f"Total collected: {len(all_items)}, new URLs this scan: {len(new_urls)}, pending backlog: {len(pending)}")
 
-    # Process only a small batch each run. Unfinished items remain pending, so nothing is lost.
     pending_urls = list(pending.keys())[:DETAIL_FETCH_LIMIT]
     detail_items = [pending[url] for url in pending_urls]
     notified = []
@@ -292,7 +317,6 @@ def main():
         seen.add(url)
         pending.pop(url, None)
 
-    # Keep the lightweight list data for everything discovered this scan.
     for item in all_items:
         if item["url"] not in seen:
             pending.setdefault(item["url"], item)
