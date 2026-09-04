@@ -98,7 +98,109 @@ jobs:
               print("Applied structural meta-description parser patch")
           else:
               print("Source already uses structural meta-description parsing or legacy block not found")
+
+          # C-rank distance rules for the two high-volume brands requested by the user.
+          # The Jimoty list page is still collected at 50km so other brands keep their
+          # existing 50km behavior. IKEA/MUJI are filtered after location extraction.
+          marker = 'def match_rules(item, rules):\n'
+          if marker not in s:
+              raise RuntimeError("match_rules marker not found")
+
+          helper = r'''CITY_COORDS = {
+              "名古屋市": (35.1815, 136.9066), "清須市": (35.1990, 136.8520),
+              "北名古屋市": (35.2450, 136.8700), "豊山町": (35.2360, 136.9100),
+              "春日井市": (35.2470, 136.9720), "小牧市": (35.2910, 136.9120),
+              "稲沢市": (35.2490, 136.7800), "あま市": (35.2000, 136.7900),
+              "津島市": (35.1770, 136.7410), "弥富市": (35.1170, 136.7240),
+              "蟹江町": (35.1300, 136.8200), "飛島村": (35.0800, 136.8200),
+              "大治町": (35.1800, 136.8200), "大府市": (35.0070, 136.9630),
+              "東海市": (35.0200, 136.9020), "豊明市": (35.0510, 137.0200),
+              "日進市": (35.1320, 137.0390), "長久手市": (35.1840, 137.0480),
+              "瀬戸市": (35.2230, 137.0840), "尾張旭市": (35.2160, 137.0350),
+              "岩倉市": (35.2790, 136.8710), "江南市": (35.3310, 136.8710),
+              "犬山市": (35.3790, 136.9440), "一宮市": (35.3030, 136.8020),
+              "羽島市": (35.3190, 136.7030), "桑名市": (35.0600, 136.6830),
+              "木曽岬町": (35.0730, 136.7360), "海津市": (35.2200, 136.6300),
+              "刈谷市": (34.9900, 137.0020), "知立市": (35.0000, 137.0500),
+              "みよし市": (35.0900, 137.0700), "東郷町": (35.0900, 137.0600),
+              "扶桑町": (35.3600, 136.9100), "大口町": (35.3300, 136.9100),
+          }
+
+          def city_distance_km(city):
+              point = CITY_COORDS.get(city)
+              if not point:
+                  return None
+              lat1, lon1 = map(float, (CENTER_LAT, CENTER_LNG))
+              lat2, lon2 = point
+              import math
+              p = math.pi / 180.0
+              x = (lon2 - lon1) * p * math.cos((lat1 + lat2) * p / 2.0) * 6371.0
+              y = (lat2 - lat1) * p * 6371.0
+              return math.sqrt(x * x + y * y)
+
+          def extract_city(text):
+              haystack = clean(text or "")
+              # Prefer the first municipality token in the compact listing-card text.
+              names = sorted(CITY_COORDS, key=len, reverse=True)
+              for city in names:
+                  if city in haystack:
+                      return city
+              return None
+
+          def apply_rank_metadata(rules):
+              for rule in rules:
+                  if rule.get("name") in ("IKEA", "無印良品"):
+                      rule["rank"] = "C"
+                      rule["max_distance_km"] = 25
+              return rules
+
+          def _match_rules_with_distance(item, rules):
+              text = f"{item.get('title', '')}\n{item.get('description', '')}"
+              matches = []
+              for rule in apply_rank_metadata(rules):
+                  if rule.get("enabled", True) is False:
+                      continue
+                  for keyword in rule.get("keywords", []):
+                      if keyword_match(text, keyword):
+                          max_distance = rule.get("max_distance_km")
+                          distance = item.get("distance_km")
+                          if max_distance is not None:
+                              if distance is None or distance > max_distance:
+                                  print(f"DISTANCE FILTER: skip {rule.get('name')} city={item.get('location_city')} distance={distance}km max={max_distance}km")
+                                  break
+                          matches.append({
+                              "name": rule.get("name", keyword),
+                              "keyword": keyword,
+                              "rank": rule.get("rank"),
+                              "distance_km": round(distance, 1) if distance is not None else None,
+                          })
+                          break
+              return matches
+
+          '''
+          if 'CITY_COORDS = {' not in s:
+              s = s.replace(marker, helper + marker, 1)
+
+          start = s.index('def match_rules(item, rules):')
+          end = s.index('\ndef fetch_detail(item):', start)
+          s = s[:start] + 'def match_rules(item, rules):\n    return _match_rules_with_distance(item, rules)\n' + s[end:]
+
+          # Preserve the compact card text, which contains the handover municipality,
+          # before fetch_detail replaces description with og:description.
+          s = s.replace('        page = fetch(item["url"])\n', '        card_text = item.get("description", "")\n        item["location_city"] = extract_city(card_text)\n        item["distance_km"] = city_distance_km(item.get("location_city"))\n        page = fetch(item["url"])\n', 1)
+
+          # Narrow the card-text window so the location token belongs to the current card.
+          s = s.replace('        start = max(0, m.start() - 3000)\n        end = min(len(page_html), m.start() + 15000)\n', '        start = max(0, m.start() - 500)\n        end = min(len(page_html), m.start() + 5000)\n', 1)
+
+          # Add rank/distance to Discord output without changing the existing message shape.
+          old_post = '    matched = ", ".join(m["name"] for m in matches)\n'
+          new_post = '''    matched = ", ".join(m["name"] for m in matches)\n    ranked = next((m for m in matches if m.get("rank")), None)\n    rank_line = f"ランク：{ranked['rank']}" if ranked else ""\n    distance_line = f"距離：約{ranked['distance_km']}km" if ranked and ranked.get("distance_km") is not None else ""\n'''
+          if old_post in s and 'rank_line = ' not in s:
+              s = s.replace(old_post, new_post, 1)
+              s = s.replace('payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\\n{price_line}', 'payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\\n{rank_line}\\n{distance_line}\\n{price_line}', 1)
+
           p.write_text(s, encoding="utf-8")
+          print("Applied C-rank rules: IKEA/MUJI <= 25km")
           PY
           python jimoty_monitor.py
 
