@@ -45,12 +45,9 @@ jobs:
           JIMOTY_STATE_PATH: jimoty_db.json
           JIMOTY_RULES_PATH: notification_rules.json
           JIMOTY_RESULT_PATH: jimoty_monitor_result.json
-          # Monitor the full "売ります・あげます" feed, not furniture only.
-          # The radius parameters are retained for Jimoty's location-aware feed.
           JIMOTY_BASE_URLS: https://jmty.jp/aichi/sale,https://jmty.jp/gifu/sale,https://jmty.jp/mie/sale,https://jmty.jp/shiga/sale
           JIMOTY_BASE_URL: https://jmty.jp/aichi/sale
           JIMOTY_MAX_PAGES: 2
-          # Process fresh listings first; keep enough capacity to work through backlog.
           JIMOTY_DETAIL_FETCH_LIMIT: 60
           JIMOTY_DETAIL_FETCH_WORKERS: 10
           JIMOTY_HTTP_TIMEOUT: 15
@@ -58,8 +55,19 @@ jobs:
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
         run: |
-          # Temporary guard against the known PR #5 typo; keep the runtime safe until the source is corrected.
-          sed -i 's/len(fresh_new_urls, DETAIL_FETCH_LIMIT)/min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)/g' jimoty_monitor.py
+          # Normalize the known malformed expression before execution.
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("jimoty_monitor.py")
+          s = p.read_text(encoding="utf-8")
+          bad = "min(len(pending_urls) - min(min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)))"
+          good = "min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)"
+          if bad in s:
+              s = s.replace(bad, good)
+          else:
+              s = s.replace("min(min(len(fresh_new_urls), DETAIL_FETCH_LIMIT))", good)
+          p.write_text(s, encoding="utf-8")
+          PY
           python jimoty_monitor.py
 
       - name: Upload Jimoty database
