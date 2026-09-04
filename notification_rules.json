@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "rules": [
     {"name":"IKEA","keywords":["IKEA","イケア","イケヤ","IKEA家具","イケア家具"]},
     {"name":"無印良品","keywords":["無印良品","MUJI","無印","ムジ"]},
@@ -55,6 +55,7 @@
     {"name":"イサム・ノグチ","keywords":["イサム・ノグチ","イサムノグチ","Isamu Noguchi","ISAMU NOGUCHI","isamu noguchi","Noguchi","ノグチ"]},
     {"name":"AKARI","keywords":["AKARI","Akari","akari","あかり","アカリ"]},
     {"name":"ART WORK STUDIO","keywords":["ART WORK STUDIO","ART WORK studio","art work studio","ARTWORK STUDIO","ARTWORKSTUDIO","アートワークスタジオ","アートワーク スタジオ"]},
-    {"name":"BALMUDA","keywords":["BALMUDA","Balmuda","balmuda","バルミューダ","バルミューダー"]}
+    {"name":"BALMUDA","keywords":["BALMUDA","Balmuda","balmuda","バルミューダ","バルミューダー"]},
+    {"name":"Carl Hansen & Søn","keywords":["Carl Hansen & Søn","Carl Hansen & Son","CARL HANSEN & SØN","CARL HANSEN & SON","Carl Hansen","CARL HANSEN","カール・ハンセン＆サン","カール・ハンセン&サン","カールハンセン＆サン","カールハンセン&サン","カール・ハンセン","カールハンセン","CH24","Yチェア","Yチェアー"]}
   ]
 }
