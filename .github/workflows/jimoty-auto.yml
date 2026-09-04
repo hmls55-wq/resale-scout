@@ -55,18 +55,18 @@ jobs:
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
         run: |
-          # Runtime guard: replace any malformed Detail priority print line safely.
+          # Runtime guard: replace the malformed legacy Detail priority print line.
           python - <<'PY'
           from pathlib import Path
           p = Path("jimoty_monitor.py")
           lines = p.read_text(encoding="utf-8").splitlines()
-          fixed = []
+          out = []
           for line in lines:
               if "Detail priority:" in line and "print(" in line:
                   indent = line[:len(line) - len(line.lstrip())]
-                  line = indent + 'print(f"Detail priority: fresh={min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)}, old_pending={max(0, len(pending_urls) - min(len(fresh_new_urls), DETAIL_FETCH_LIMIT))}")'
-              fixed.append(line)
-          p.write_text("\n".join(fixed) + "\n", encoding="utf-8")
+                  line = indent + 'print("Detail priority: fresh", min(len(fresh_new_urls), DETAIL_FETCH_LIMIT), "old_pending", max(0, len(pending_urls) - min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)))'
+              out.append(line)
+          p.write_text("\n".join(out) + "\n", encoding="utf-8")
           PY
           python jimoty_monitor.py
 
