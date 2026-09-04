@@ -149,6 +149,14 @@ def save_state(data):
 def load_rules():
     data = json.loads(RULES_PATH.read_text(encoding="utf-8"))
     rules = data.get("rules", [])
+    # "無印" is too short/broad and can appear in unrelated page text.
+    # Keep the stronger brand spellings only.
+    for rule in rules:
+        if rule.get("name") == "無印良品":
+            rule["keywords"] = [
+                keyword for keyword in rule.get("keywords", [])
+                if str(keyword).strip() != "無印"
+            ]
     rules = [{"name": "ITOKI", "keywords": ["ITOKI", "イトーキ", "ITOKI家具", "イトーキ家具"]}] + rules
     return rules
 
@@ -165,6 +173,8 @@ def keyword_match(text, keyword):
 
 
 def match_rules(item, rules):
+    # Brand/product matching is intentionally limited to the listing's
+    # title + description fields, never arbitrary page-wide HTML.
     text = f"{item.get('title', '')}\n{item.get('description', '')}"
     matches = []
     for rule in rules:
@@ -201,7 +211,13 @@ def fetch_detail(item):
         parser = MetaDescriptionParser()
         parser.feed(page)
         descriptions = [clean(x) for x in parser.descriptions if clean(x)]
-        item["description"] = (max(descriptions, key=len) if descriptions else clean(page))[:12000]
+        # Never fall back to the entire detail-page HTML. If no structured
+        # description exists, retain the listing-card description already
+        # extracted from the search results page.
+        if descriptions:
+            item["description"] = max(descriptions, key=len)[:12000]
+        else:
+            item["description"] = item.get("description", "")[:12000]
         if item.get("price") is None:
             item["price"] = extract_price(item["description"])
         item["detail_ok"] = True
