@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "name": "商品・シリーズ名",
+      "keywords": [
+        "Aeron","アーロンチェア","Embody","エンボディ","Mirra","ミラチェア","Sayl","セイルチェア",
+        "Eames Lounge Chair","イームズラウンジチェア","Eames Shell Chair","イームズシェルチェア","Eames Plastic Chair","Eames Wire Chair","Nelson Bench","ネルソンベンチ",
+        "Barcelona Chair","バルセロナチェア","Platner Chair","Platner Table","プラトナーチェア","Tulip Chair","チューリップチェア","Tulip Table","チューリップテーブル","Diamond Chair","ダイヤモンドチェア",
+        "Panton Chair","パントンチェア","Alcove","アルコーブ","Grand Repos","Tip Ton","Standard Chair","スタンダードチェア","HAL Chair",
+        "Seven Chair","セブンチェア","Series 7","Series Seven","Ant Chair","アントチェア","Egg Chair","エッグチェア","Swan Chair","スワンチェア","PK22","PK80","PK61","AJ Chair","AJチェア",
+        "CH24","CH25","CH07","CH23","CH88","CH33","CH36","CH37","CH46","CH47","CH50","CH78","Y Chair","Yチェア","Yチェアー","Wishbone Chair","ウィッシュボーンチェア","Shell Chair","シェルチェア",
+        "Stool 60","スツール60","Stool E60","スツールE60","Chair 69","チェア69","Chair 66","チェア66","Paimio Chair","パイミオチェア","Armchair 41","アームチェア41","Tea Trolley","ティートロリー",
+        "PP68","PP58","PP66","PP19","PP250","PP501","PP503","PP505","The Chair","ザ・チェア",
+        "About A Chair","AAC","About A Stool","AAS","Mags Sofa","Hee Chair","Result Chair","Palissade","パリセード","PC Portable","70/70 Table","Around Table","Stacked Storage",
+        "Outline Sofa","Fiber Chair","Cover Chair","Nerd Chair","Workshop Chair","Connect Sofa","Connect Soft Modular Sofa","E27","Ambit Pendant",
+        "Beetle Chair","ビートルチェア","Pacha Sofa","Pacha Lounge","TS Table","TS Coffee Table","Grasshopper","Gräshoppa","Bestlite BL1","Bestlite BL2","Bestlite BL3",
+        "String System","ストリングシステム","String Pocket","String Pocket Shelf","String Shelving","String Works",
+        "PH5","PH 5","PH Artichoke","アーティチョーク","PH Snowball","PHスノーボール","AJ Royal","AJ Table","AJ Floor","AJ Wall","Panthella","パンテラ","PH 2/1","PH 3/2","PH 4/3",
+        "Arco","アルコ","IC Lights","IC","Skygarden","スカイガーデン","Bellhop","ベルホップ","Parentesi","パレンテージ","Taccia","Aim","265","Toio",
+        "Chair One","チェアワン","ChairOne","Puppy","パピー","Bombo","ボンボ","360 Chair","Troy","Officina","Air Chair","Déjà-vu",
+        "Louis Ghost","ルイゴースト","Masters","マスターズ","Componibili","コンポニビリ","Victoria Ghost","Eros","Masters Chair",
+        "Catifa","Catifa 46","Catifa 53","Aava Chair","Arki Table","Leaf Chair","Juno Chair",
+        "No.14","14チェア","214","S64","S32","209","233","ベントウッドチェア","曲木椅子",
+        "B20","B25","B27","B42","B10","M21","M22","M45","M20","B9",
+        "Kチェア","Kチェア1シーター","Kチェア2シーター","ロビーチェア","ロビーチェア1シーター","ロビーチェア2シーター","ロビーチェア3シーター","オールドカリモク","THE FIRST","ザ・ファースト","ZUシリーズ",
+        "バタフライスツール","Butterfly Stool","低座イス","低座椅子","スポークチェア","ヘロンチェア","ヘロン","水之江チェア","水之江椅子","プライウッドチェア","成形合板",
+        "SEOTO","セオト","森のことば","穂高","侭","Cobrina","コブリナ","CRESCENT","クレセント",
+        "CIVIL","シビルチェア","CIVIL CHAIR","ウィルダネス","WILDERNESS","LEIチェア",
+        "ROUNDISH","ラウンディッシュ","ラウンドアームチェア","WING LUX","ウィングラックス","KOTAN","HOMAGE","ホマージュ",
+        "WILDWOOD","ワイルドウッド","MORELESS","モアレス","UC","DANISH","YU",
+        "CARAMELLA","カラメッラ","SONO","ソノ","RIPOSO","リポーゾ","VERONA","ヴェローナ","LIBERIA","リベリア",
+        "BRICK SOFA","BRICK","PIVO SOFA","PIVO","STRAND SOFA","STRAND","SIESTA SOFA","SIESTA","PLACE SOFA",
+        "無垢ダイニングテーブル","無垢材ダイニングテーブル","チーク家具","チーク材家具","ローズウッド家具","北欧ヴィンテージ家具","北欧ビンテージ家具","ミッドセンチュリー家具","デザイナーズチェア","デザイナーズソファ","デザイナーズテーブル"
+      ]
+    }
+  ]
+}
