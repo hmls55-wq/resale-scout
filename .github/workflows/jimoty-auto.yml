@@ -101,8 +101,6 @@ jobs:
               print("Source already uses structural meta-description parsing or legacy block not found")
 
           # C-rank distance rules for the two high-volume brands requested by the user.
-          # The Jimoty list page is still collected at 50km so other brands keep their
-          # existing 50km behavior. IKEA/MUJI are filtered after location extraction.
           marker = 'def match_rules(item, rules):\n'
           if marker not in s:
               raise RuntimeError("match_rules marker not found")
@@ -141,7 +139,6 @@ jobs:
 
           def extract_city(text):
               haystack = clean(text or "")
-              # Prefer the first municipality token in the compact listing-card text.
               names = sorted(CITY_COORDS, key=len, reverse=True)
               for city in names:
                   if city in haystack:
@@ -169,12 +166,7 @@ jobs:
                               if distance is None or distance > max_distance:
                                   print(f"DISTANCE FILTER: skip {rule.get('name')} city={item.get('location_city')} distance={distance}km max={max_distance}km")
                                   break
-                          matches.append({
-                              "name": rule.get("name", keyword),
-                              "keyword": keyword,
-                              "rank": rule.get("rank"),
-                              "distance_km": round(distance, 1) if distance is not None else None,
-                          })
+                          matches.append({"name": rule.get("name", keyword), "keyword": keyword, "rank": rule.get("rank"), "distance_km": round(distance, 1) if distance is not None else None})
                           break
               return matches
 
@@ -186,25 +178,16 @@ jobs:
           end = s.index('\ndef fetch_detail(item):', start)
           s = s[:start] + 'def match_rules(item, rules):\n    return _match_rules_with_distance(item, rules)\n' + s[end:]
 
-          # Preserve the compact card text, which contains the handover municipality,
-          # before fetch_detail replaces description with og:description.
           s = s.replace('        page = fetch(item["url"])\n', '        card_text = item.get("description", "")\n        item["location_city"] = extract_city(card_text)\n        item["distance_km"] = city_distance_km(item.get("location_city"))\n        page = fetch(item["url"])\n', 1)
-
-          # Narrow the card-text window so the location token belongs to the current card.
           s = s.replace('        start = max(0, m.start() - 3000)\n        end = min(len(page_html), m.start() + 15000)\n', '        start = max(0, m.start() - 500)\n        end = min(len(page_html), m.start() + 5000)\n', 1)
 
-          # Add rank/distance to Discord output without changing the existing message shape.
           old_post = '    matched = ", ".join(m["name"] for m in matches)\n'
           new_post = '''    matched = ", ".join(m["name"] for m in matches)\n    ranked = next((m for m in matches if m.get("rank")), None)\n    rank_line = f"ランク：{ranked['rank']}" if ranked else ""\n    distance_line = f"距離：約{ranked['distance_km']}km" if ranked and ranked.get("distance_km") is not None else ""\n'''
           if old_post in s and 'rank_line = ' not in s:
               s = s.replace(old_post, new_post, 1)
               s = s.replace('payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\\n{price_line}', 'payload = {"content": "🚨 ジモティー新着・通知条件一致", "embeds": [{"title": item["title"], "url": item["url"], "description": f"通知条件：{matched}\\n{rank_line}\\n{distance_line}\\n{price_line}', 1)
 
-          p.write_text(s, encoding="utf-8")
-
           # Merge the new product/series keyword master into the runtime rules.
-          # This keeps notification_rules.json as the main source while allowing the
-          # product dictionary to evolve independently without overwriting existing rules.
           rules_path = Path("notification_rules.json")
           product_path = Path("product_keywords.json")
           if product_path.exists():
@@ -222,7 +205,15 @@ jobs:
               rules_path.write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
               print(f"Merged supplemental product keywords: {len(extra.get('rules', []))} rule(s)")
 
-          print("Applied C-rank rules: IKEA/MUJI <= 25km")
+          # IKEA is intentionally high-noise: only notify for the specific FROSTA stool.
+          for rule in json.loads(rules_path.read_text(encoding="utf-8")).get("rules", []):
+              if rule.get("name") == "IKEA":
+                  rule["keywords"] = ["FROSTA", "フロスタ"]
+                  break
+          rules_path.write_text(json.dumps(json.loads(rules_path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          print("IKEA notification narrowed to FROSTA / フロスタ only")
+
+          p.write_text(s, encoding="utf-8")
           PY
           python jimoty_monitor.py
 
