@@ -149,14 +149,8 @@ def save_state(data):
 def load_rules():
     data = json.loads(RULES_PATH.read_text(encoding="utf-8"))
     rules = data.get("rules", [])
-    # "無印" is too short/broad and can appear in unrelated page text.
-    # Keep the stronger brand spellings only.
-    for rule in rules:
-        if rule.get("name") == "無印良品":
-            rule["keywords"] = [
-                keyword for keyword in rule.get("keywords", [])
-                if str(keyword).strip() != "無印"
-            ]
+    # MUJI is intentionally excluded from Resell Scout brand monitoring.
+    rules = [rule for rule in rules if rule.get("name") != "無印良品"]
     rules = [{"name": "ITOKI", "keywords": ["ITOKI", "イトーキ", "ITOKI家具", "イトーキ家具"]}] + rules
     return rules
 
@@ -315,7 +309,6 @@ def main():
         f"already-pending seen again: {already_pending_seen}, pending backlog: {len(pending)}"
     )
 
-    # Newly discovered listings always go first. Older failed/pending details follow.
     old_pending_urls = [url for url in pending.keys() if url not in fresh_set]
     pending_urls = (fresh_new_urls + old_pending_urls)[:DETAIL_FETCH_LIMIT]
     detail_items = [pending[url] for url in pending_urls]
