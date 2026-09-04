@@ -57,7 +57,10 @@ jobs:
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
-        run: python jimoty_monitor.py
+        run: |
+          # Temporary guard against the known PR #5 typo; keep the runtime safe until the source is corrected.
+          sed -i 's/len(fresh_new_urls, DETAIL_FETCH_LIMIT)/min(len(fresh_new_urls), DETAIL_FETCH_LIMIT)/g' jimoty_monitor.py
+          python jimoty_monitor.py
 
       - name: Upload Jimoty database
         if: always()
