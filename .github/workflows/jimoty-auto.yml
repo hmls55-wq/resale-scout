@@ -206,12 +206,20 @@ jobs:
               print(f"Merged supplemental product keywords: {len(extra.get('rules', []))} rule(s)")
 
           # IKEA is intentionally high-noise: only notify for the specific FROSTA stool.
-          for rule in json.loads(rules_path.read_text(encoding="utf-8")).get("rules", []):
+          final_rules = json.loads(rules_path.read_text(encoding="utf-8"))
+          for rule in final_rules.get("rules", []):
               if rule.get("name") == "IKEA":
                   rule["keywords"] = ["FROSTA", "フロスタ"]
-                  break
-          rules_path.write_text(json.dumps(json.loads(rules_path.read_text(encoding="utf-8")), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          # KOIZUMI is also intentionally high-noise: remove all spellings from every rule.
+          blocked = {"koizumi", "コイズミ"}
+          for rule in final_rules.get("rules", []):
+              rule["keywords"] = [
+                  keyword for keyword in rule.get("keywords", [])
+                  if str(keyword).strip().lower() not in blocked
+              ]
+          rules_path.write_text(json.dumps(final_rules, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
           print("IKEA notification narrowed to FROSTA / フロスタ only")
+          print("KOIZUMI / コイズミ notifications disabled")
 
           p.write_text(s, encoding="utf-8")
           PY
