@@ -195,10 +195,16 @@ jobs:
           # IKEA: only FROSTA / フロスタ.
           # KOIZUMI: remove from all rules.
           # YAMADA: remove from all rules (requested: ヤマダ / yamada).
+          # HAY: keep the English brand keyword HAY, but remove the katakana ヘイ.
           final_rules = json.loads(rules_path.read_text(encoding="utf-8"))
           for rule in final_rules.get("rules", []):
               if rule.get("name") == "IKEA":
                   rule["keywords"] = ["FROSTA", "フロスタ"]
+              if rule.get("name") == "HAY":
+                  rule["keywords"] = [
+                      keyword for keyword in rule.get("keywords", [])
+                      if str(keyword).strip() != "ヘイ"
+                  ]
           blocked = {"koizumi", "コイズミ", "yamada", "ヤマダ"}
           for rule in final_rules.get("rules", []):
               rule["keywords"] = [
