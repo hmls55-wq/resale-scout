@@ -61,8 +61,6 @@ jobs:
           p = Path("jimoty_monitor.py")
           s = p.read_text(encoding="utf-8")
 
-          # Keep the checked-in source authoritative; normalize the legacy
-          # detail-description extraction block when necessary.
           old = '''        descriptions = []
           patterns = [
               r'<meta[^>]+property=["\\']og:description["\\'][^>]+content=["\\'](.*?)["\\']',
@@ -176,7 +174,6 @@ jobs:
           s = s.replace('        page = fetch(item["url"])\n', '        card_text = item.get("description", "")\n        item["location_city"] = extract_city(card_text)\n        item["distance_km"] = city_distance_km(item.get("location_city"))\n        page = fetch(item["url"])\n', 1)
           s = s.replace('        start = max(0, m.start() - 3000)\n        end = min(len(page_html), m.start() + 15000)\n', '        start = max(0, m.start() - 500)\n        end = min(len(page_html), m.start() + 5000)\n', 1)
 
-          # Merge supplemental product/series/model keywords.
           rules_path = Path("notification_rules.json")
           product_path = Path("product_keywords.json")
           if product_path.exists():
@@ -196,6 +193,7 @@ jobs:
           # KOIZUMI: remove from all rules.
           # YAMADA: remove from all rules (requested: ヤマダ / yamada).
           # HAY: keep the English brand keyword HAY, but remove the katakana ヘイ.
+          # LE CREUSET: remove the brand from all rules (requested: ル・クルーゼ).
           final_rules = json.loads(rules_path.read_text(encoding="utf-8"))
           for rule in final_rules.get("rules", []):
               if rule.get("name") == "IKEA":
@@ -205,7 +203,7 @@ jobs:
                       keyword for keyword in rule.get("keywords", [])
                       if str(keyword).strip() != "ヘイ"
                   ]
-          blocked = {"koizumi", "コイズミ", "yamada", "ヤマダ"}
+          blocked = {"koizumi", "コイズミ", "yamada", "ヤマダ", "ル・クルーゼ", "ル クルーゼ", "le creuset"}
           for rule in final_rules.get("rules", []):
               rule["keywords"] = [
                   keyword for keyword in rule.get("keywords", [])
