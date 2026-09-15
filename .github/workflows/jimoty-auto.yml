@@ -2,8 +2,6 @@ name: Jimoty Auto Monitor
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "3-59/5 * * * *"
 
 concurrency:
   group: jimoty-auto-monitor
@@ -189,32 +187,18 @@ jobs:
               base["version"] = max(int(base.get("version", 0)), int(extra.get("version", 0)) + 6)
               rules_path.write_text(json.dumps(base, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-          # IKEA: only FROSTA / フロスタ.
-          # KOIZUMI: remove from all rules.
-          # YAMADA: remove from all rules (requested: ヤマダ / yamada).
-          # HAY: keep the English brand keyword HAY, but remove the katakana ヘイ.
-          # LE CREUSET: remove the brand from all rules (requested: ル・クルーゼ).
-          # KNOLL: keep the English brand keyword Knoll, but remove the katakana ノル.
+          # Keep the current keyword overrides.
           final_rules = json.loads(rules_path.read_text(encoding="utf-8"))
           for rule in final_rules.get("rules", []):
               if rule.get("name") == "IKEA":
                   rule["keywords"] = ["FROSTA", "フロスタ"]
               if rule.get("name") == "HAY":
-                  rule["keywords"] = [
-                      keyword for keyword in rule.get("keywords", [])
-                      if str(keyword).strip() != "ヘイ"
-                  ]
+                  rule["keywords"] = [keyword for keyword in rule.get("keywords", []) if str(keyword).strip() != "ヘイ"]
               if rule.get("name") == "Knoll":
-                  rule["keywords"] = [
-                      keyword for keyword in rule.get("keywords", [])
-                      if str(keyword).strip() != "ノル"
-                  ]
+                  rule["keywords"] = [keyword for keyword in rule.get("keywords", []) if str(keyword).strip() != "ノル"]
           blocked = {"koizumi", "コイズミ", "yamada", "ヤマダ", "ル・クルーゼ", "ル クルーゼ", "le creuset"}
           for rule in final_rules.get("rules", []):
-              rule["keywords"] = [
-                  keyword for keyword in rule.get("keywords", [])
-                  if str(keyword).strip().lower() not in blocked
-              ]
+              rule["keywords"] = [keyword for keyword in rule.get("keywords", []) if str(keyword).strip().lower() not in blocked]
           rules_path.write_text(json.dumps(final_rules, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
           p.write_text(s, encoding="utf-8")
@@ -248,4 +232,8 @@ jobs:
           ELAPSED=$((NOW-START))
           WAIT=$((300-ELAPSED))
           if [ "$WAIT" -gt 0 ]; then sleep "$WAIT"; fi
-          gh workflow run jimoty-auto.yml --repo "$GITHUB_REPOSITORY" --ref main
+          for attempt in 1 2 3; do
+            gh workflow run jimoty-auto.yml --repo "$GITHUB_REPOSITORY" --ref main && exit 0
+            sleep 10
+          done
+          exit 1
