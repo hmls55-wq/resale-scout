@@ -42,12 +42,12 @@ jobs:
           JIMOTY_STATE_PATH: jimoty_db.json
           JIMOTY_RULES_PATH: notification_rules.json
           JIMOTY_RESULT_PATH: jimoty_monitor_result.json
-          JIMOTY_BASE_URLS: https://jmty.jp/aichi/sale,https://jmty.jp/gifu/sale,https://jmty.jp/mie/sale,https://jmty.jp/shiga/sale
+          JIMOTY_BASE_URLS: https://jmty.jp/aichi/sale
           JIMOTY_BASE_URL: https://jmty.jp/aichi/sale
           JIMOTY_MAX_PAGES: 2
-          JIMOTY_DETAIL_FETCH_LIMIT: 60
+          JIMOTY_DETAIL_FETCH_LIMIT: 30
           JIMOTY_DETAIL_FETCH_WORKERS: 10
-          JIMOTY_HTTP_TIMEOUT: 15
+          JIMOTY_HTTP_TIMEOUT: 10
           JIMOTY_DISTANCE_KM: 50
           JIMOTY_CENTER_LAT: 35.1681
           JIMOTY_CENTER_LNG: 136.8734
@@ -226,14 +226,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set +e
+          set -e
           START=$(cat .jimoty_start_epoch 2>/dev/null || date +%s)
           NOW=$(date +%s)
           ELAPSED=$((NOW-START))
           WAIT=$((300-ELAPSED))
           if [ "$WAIT" -gt 0 ]; then sleep "$WAIT"; fi
           for attempt in 1 2 3; do
-            gh workflow run jimoty-auto.yml --repo "$GITHUB_REPOSITORY" --ref main && exit 0
+            if gh workflow run jimoty-auto.yml --repo "$GITHUB_REPOSITORY" --ref main; then
+              echo "Next run dispatched successfully (attempt ${attempt})."
+              exit 0
+            fi
+            echo "Dispatch failed (attempt ${attempt}); retrying in 10s..."
             sleep 10
           done
+          echo "ERROR: failed to dispatch the next Jimoty Auto Monitor run."
           exit 1
